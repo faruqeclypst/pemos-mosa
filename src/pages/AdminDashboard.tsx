@@ -1123,33 +1123,7 @@ const AdminDashboard = () => {
                    ))}
                  </nav>
                </div>
-                           </div>
-
-                             {/* Export Instructions */}
-              <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
-                <p className="text-sm text-green-800">
-                  <strong>📊 Export Options:</strong>
-                </p>
-                <ul className="text-sm text-green-800 mt-2 space-y-1">
-                  <li>• <strong>Export Excel:</strong> Unduh semua token sesuai filter dalam 1 file CSV</li>
-                  <li>• <strong>Export per Kelas:</strong> Unduh semua token siswa dalam 1 file CSV dengan section terpisah per kelas (tidak dipisah comma)</li>
-                </ul>
-              </div>
-
-              {/* Token Management Instructions */}
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-                <p className="text-sm text-blue-800">
-                  <strong>🔧 Token Management:</strong>
-                </p>
-                <ul className="text-sm text-blue-800 mt-2 space-y-1">
-                  <li>• <strong>Reset Token:</strong> Klik status "Terpakai" untuk mengembalikan token menjadi tersedia (akan menghapus vote)</li>
-                  <li>• <strong>Hapus Token:</strong> Klik ikon trash untuk menghapus token</li>
-                  <li>• <strong>Salin Token:</strong> Klik ikon copy untuk menyalin kode token</li>
-                </ul>
-                <div className="mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
-                  <strong>💡 Info Bobot Voting:</strong> Siswa = 1 poin, Guru = 2 poin. Reset token akan mengurangi hasil voting sesuai bobot token tersebut.
-                </div>
-              </div>
+             </div>
 
              {/* Search and Sort Controls */}
              <div className="mb-6 bg-white rounded-lg shadow p-4">
