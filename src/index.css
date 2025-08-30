@@ -28,6 +28,92 @@
   .input-field {
     @apply w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent;
   }
+  
+  .clickable-points {
+    @apply cursor-pointer hover:bg-gray-100 px-2 py-1 rounded transition-all duration-200 hover:scale-105;
+  }
+  
+  .info-box {
+    @apply bg-blue-50 border border-blue-200 rounded-lg p-4;
+  }
+  
+  .info-box-green {
+    @apply bg-green-50 border border-green-200 rounded-lg p-4;
+  }
+  
+  .info-box-yellow {
+    @apply bg-yellow-50 border border-yellow-200 rounded-lg p-4;
+  }
+  
+  /* Pie Chart Animations */
+  .pie-chart-slice {
+    transition: all 0.3s ease;
+    cursor: pointer;
+  }
+  
+  .pie-chart-slice:hover {
+    transform: scale(1.02);
+    filter: brightness(1.1);
+  }
+  
+  /* Enhanced tooltip styles */
+  .pie-chart-slice:hover::after {
+    content: attr(title);
+    position: absolute;
+    background: rgba(0, 0, 0, 0.9);
+    color: white;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    white-space: pre-line;
+    z-index: 1000;
+    pointer-events: none;
+    transform: translate(-50%, -100%);
+    margin-top: -10px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+  
+  .pie-chart-legend-item {
+    transition: all 0.2s ease;
+  }
+  
+  .pie-chart-legend-item:hover {
+    transform: translateX(4px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+  
+  /* Chart container animations */
+  .chart-container {
+    animation: fadeInUp 0.6s ease-out;
+  }
+  
+  @keyframes fadeInUp {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  
+  /* Smooth transitions for chart updates */
+  .chart-update {
+    transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  
+  /* Enhanced shadows and borders */
+  .chart-card {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    border: 1px solid rgba(229, 231, 235, 0.8);
+  }
+  
+  .chart-card:hover {
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    transform: translateY(-2px);
+    transition: all 0.3s ease;
+  }
 }
 
 

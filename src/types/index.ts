@@ -2,6 +2,7 @@ export interface Candidate {
   id: string;
   name: string;
   photo: string;
+  photoFile?: File; // For image upload
   vision: string;
   mission: string;
   class?: string;
@@ -32,6 +33,7 @@ export interface Admin {
   id: string;
   email: string;
   name: string;
+  password: string; // Add password field
   role: 'super' | 'admin';
   createdAt: Date;
 }

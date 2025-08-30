@@ -12,7 +12,9 @@ const LandingPage = () => {
               <div className="bg-primary-600 rounded-lg p-2">
                 <Vote className="h-6 w-6 text-white" />
               </div>
-              <h1 className="text-2xl font-bold text-gray-900">Pilkosis Mosa</h1>
+              <h1 className="text-2xl font-bold text-gray-900">
+               PEMOS SMAN MODAL BANGSA {new Date().getFullYear()}
+             </h1>
             </div>
             <Link 
               to="/admin/login" 
@@ -190,7 +192,7 @@ const LandingPage = () => {
               <div className="bg-primary-600 rounded-lg p-2">
                 <Vote className="h-6 w-6 text-white" />
               </div>
-              <h3 className="text-2xl font-bold">Pilkosis Mosa</h3>
+              <h3 className="text-2xl font-bold">PEMOS SMAN MODAL BANGSA {new Date().getFullYear()}</h3>
             </div>
             <p className="text-gray-400 mb-4">
               Sistem Voting Digital untuk Pemilihan Ketua OSIS
@@ -206,7 +208,7 @@ const LandingPage = () => {
               </div>
             </div>
             <div className="mt-6 pt-6 border-t border-gray-800">
-              <p className="text-gray-500">&copy; 2024 Pilkosis Mosa. All rights reserved.</p>
+              <p className="text-gray-500">&copy; {new Date().getFullYear()} Alfaruq Asri, S.Pd. All rights reserved.</p>
             </div>
           </div>
         </div>

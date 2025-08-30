@@ -1,4 +1,4 @@
-# Pilkosis Mosa - Sistem Voting Digital
+# PEMOS SMAN Modal Bangsa - Sistem Voting Digital
 
 Sistem voting digital untuk pemilihan ketua OSIS dengan fitur token unik dan interface Tinder-like.
 
@@ -267,7 +267,7 @@ Untuk bantuan dan pertanyaan:
 
 ---
 
-**Pilkosis Mosa** - Sistem Voting Digital yang Aman dan Transparan 🗳️
+**PEMOS SMAN MODAL BANGSA** - Sistem Voting Digital yang Aman dan Transparan 🗳️
 
 
 
