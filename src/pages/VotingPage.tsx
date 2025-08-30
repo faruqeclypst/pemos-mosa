@@ -1,0 +1,365 @@
+import { useState, useEffect } from 'react';
+import { ref, get, update, push } from 'firebase/database';
+import { db } from '../config/firebase';
+import { Candidate, Token, Vote } from '../types';
+import { Heart, Check, Key, ArrowLeft, Users, Vote as VoteIcon } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+
+const VotingPage = () => {
+  const [step, setStep] = useState<'token' | 'voting' | 'confirm' | 'complete'>('token');
+  const [token, setToken] = useState('');
+  const [currentToken, setCurrentToken] = useState<Token | null>(null);
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    fetchCandidates();
+  }, []);
+
+  const fetchCandidates = async () => {
+    try {
+      const candidatesRef = ref(db, 'candidates');
+      const candidatesSnapshot = await get(candidatesRef);
+      const candidatesData: Candidate[] = [];
+      if (candidatesSnapshot.exists()) {
+        candidatesSnapshot.forEach((childSnapshot) => {
+          const data = childSnapshot.val();
+          candidatesData.push({
+            id: childSnapshot.key!,
+            ...data,
+            createdAt: data.createdAt ? new Date(data.createdAt) : new Date(),
+            updatedAt: data.updatedAt ? new Date(data.updatedAt) : new Date()
+          });
+        });
+      }
+      setCandidates(candidatesData);
+    } catch (error) {
+      console.error('Error fetching candidates:', error);
+      toast.error('Gagal memuat data kandidat');
+    }
+  };
+
+  const handleTokenSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      const tokensRef = ref(db, 'tokens');
+      const tokenSnapshot = await get(tokensRef);
+
+      if (!tokenSnapshot.exists()) {
+        toast.error('Token tidak valid atau sudah digunakan');
+        return;
+      }
+
+      // Find unused token with matching code
+      let foundToken: Token | null = null;
+      let tokenId: string | null = null;
+      
+      tokenSnapshot.forEach((childSnapshot) => {
+        const data = childSnapshot.val();
+        if (data.code === token.toUpperCase() && !data.isUsed) {
+          foundToken = {
+            id: childSnapshot.key!,
+            ...data,
+            createdAt: data.createdAt ? new Date(data.createdAt) : new Date(),
+            usedAt: data.usedAt ? new Date(data.usedAt) : undefined
+          };
+          tokenId = childSnapshot.key!;
+        }
+      });
+
+      if (!foundToken || !tokenId) {
+        toast.error('Token tidak valid atau sudah digunakan');
+        return;
+      }
+
+      setCurrentToken(foundToken);
+      setStep('voting');
+      toast.success('Token valid! Silakan mulai voting');
+    } catch (error) {
+      console.error('Error validating token:', error);
+      toast.error('Gagal memvalidasi token');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSelectCandidate = (candidate: Candidate) => {
+    setSelectedCandidate(candidate);
+    setStep('confirm');
+  };
+
+  const handleConfirmVote = async () => {
+    if (!selectedCandidate || !currentToken) return;
+
+    setLoading(true);
+    try {
+      // Create vote record
+      const vote: Omit<Vote, 'id'> = {
+        candidateId: selectedCandidate.id,
+        tokenId: currentToken.id,
+        points: currentToken.type === 'student' ? 1 : 2,
+        createdAt: new Date()
+      };
+      const votesRef = ref(db, 'votes');
+      await push(votesRef, vote);
+
+      // Mark token as used
+      const tokenRef = ref(db, `tokens/${currentToken.id}`);
+      await update(tokenRef, {
+        isUsed: true,
+        usedAt: new Date().toISOString()
+      });
+
+      setStep('complete');
+      toast.success('Voting berhasil! Terima kasih telah berpartisipasi');
+    } catch (error) {
+      console.error('Error submitting vote:', error);
+      toast.error('Gagal mengirim voting');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (step === 'token') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-primary-50 to-blue-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-md">
+          <div className="text-center mb-8">
+            <Link to="/" className="inline-flex items-center text-primary-600 hover:text-primary-700 mb-4">
+              <ArrowLeft className="h-5 w-5 mr-2" />
+              Kembali ke Beranda
+            </Link>
+            <div className="mx-auto h-16 w-16 bg-primary-600 rounded-full flex items-center justify-center mb-4">
+              <Key className="h-8 w-8 text-white" />
+            </div>
+            <h1 className="text-2xl font-bold text-gray-900 mb-2">Masukkan Token</h1>
+            <p className="text-gray-600">
+              Masukkan token 5 karakter yang telah diberikan untuk mulai voting
+            </p>
+          </div>
+
+          <form onSubmit={handleTokenSubmit} className="space-y-6">
+            <div>
+              <label htmlFor="token" className="block text-sm font-medium text-gray-700 mb-2">
+                Token Voting
+              </label>
+              <input
+                id="token"
+                type="text"
+                value={token}
+                onChange={(e) => setToken(e.target.value.toUpperCase())}
+                className="input-field text-center text-2xl font-mono tracking-widest"
+                placeholder="ABCDE"
+                maxLength={5}
+                required
+              />
+              <p className="text-xs text-gray-500 mt-2 text-center">
+                Token siswa = 1 poin, Token guru = 2 poin
+              </p>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading || token.length !== 5}
+              className="w-full btn-primary py-3 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loading ? (
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white mx-auto"></div>
+              ) : (
+                'Mulai Voting'
+              )}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (step === 'voting') {
+    if (!candidates.length) {
+      return (
+        <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+          <div className="text-center">
+            <Users className="h-16 w-16 text-gray-400 mx-auto mb-4" />
+            <h2 className="text-xl font-semibold text-gray-900 mb-2">Tidak Ada Kandidat</h2>
+            <p className="text-gray-600 mb-4">Belum ada kandidat yang tersedia untuk voting</p>
+            <Link to="/" className="btn-primary">
+              Kembali ke Beranda
+            </Link>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="min-h-screen bg-gray-50">
+        {/* Header */}
+        <header className="bg-white shadow-sm px-4 sm:px-6 py-4">
+          <div className="max-w-7xl mx-auto flex items-center justify-between">
+            <div className="flex items-center space-x-2 sm:space-x-4">
+              <Key className="h-5 w-5 sm:h-6 sm:w-6 text-primary-600" />
+              <div>
+                <h1 className="text-lg sm:text-xl font-bold text-gray-900">Pemilihan Ketua OSIS</h1>
+                <p className="text-xs sm:text-sm text-gray-600">
+                  Token: {currentToken?.code} ({currentToken?.type === 'student' ? 'Siswa' : 'Guru'})
+                </p>
+              </div>
+            </div>
+            <div className="text-xs sm:text-sm text-gray-600">
+              Pilih kandidat favorit Anda
+            </div>
+          </div>
+        </header>
+
+        {/* Candidates Grid */}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+            {candidates.map((candidate) => (
+              <div
+                key={candidate.id}
+                className="bg-white rounded-xl shadow-lg overflow-hidden hover:shadow-xl transition-shadow duration-300 cursor-pointer"
+                onClick={() => handleSelectCandidate(candidate)}
+              >
+                <div className="relative">
+                  <img
+                    src={candidate.photo || 'https://via.placeholder.com/400x300?text=No+Image'}
+                    alt={candidate.name}
+                    className="w-full h-48 object-cover"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent"></div>
+                  <div className="absolute bottom-4 left-4 right-4">
+                    <h2 className="text-lg sm:text-xl font-bold text-white mb-1">{candidate.name}</h2>
+                    {candidate.class && (
+                      <p className="text-sm text-white/90">{candidate.class}</p>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="p-4 sm:p-6">
+                  <div className="space-y-3 sm:space-y-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center">
+                        <VoteIcon className="h-4 w-4 mr-2 text-primary-600" />
+                        Visi
+                      </h3>
+                      <p className="text-sm text-gray-600 line-clamp-3">{candidate.vision}</p>
+                    </div>
+                    
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center">
+                        <VoteIcon className="h-4 w-4 mr-2 text-primary-600" />
+                        Misi
+                      </h3>
+                      <p className="text-sm text-gray-600 line-clamp-3">{candidate.mission}</p>
+                    </div>
+                  </div>
+                  
+                  <button className="w-full mt-4 sm:mt-6 bg-primary-600 hover:bg-primary-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors duration-200 flex items-center justify-center">
+                    <Heart className="h-5 w-5 mr-2" />
+                    Pilih Kandidat Ini
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (step === 'confirm') {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-md">
+          <div className="bg-white rounded-2xl shadow-lg p-6">
+            <div className="text-center mb-6">
+              <div className="mx-auto h-16 w-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
+                <Check className="h-8 w-8 text-green-600" />
+              </div>
+              <h2 className="text-xl font-bold text-gray-900 mb-2">Konfirmasi Voting</h2>
+              <p className="text-gray-600">
+                Anda akan memberikan {currentToken?.type === 'student' ? '1' : '2'} poin untuk:
+              </p>
+            </div>
+
+            {selectedCandidate && (
+              <div className="bg-gray-50 rounded-lg p-4 mb-6">
+                <div className="flex items-center space-x-4">
+                  <img
+                    src={selectedCandidate.photo || 'https://via.placeholder.com/80x80?text=No+Image'}
+                    alt={selectedCandidate.name}
+                    className="w-16 h-16 rounded-full object-cover"
+                  />
+                  <div>
+                    <h3 className="font-semibold text-gray-900">{selectedCandidate.name}</h3>
+                    {selectedCandidate.class && (
+                      <p className="text-sm text-gray-600">{selectedCandidate.class}</p>
+                    )}
+                    <p className="text-sm text-gray-600">
+                      Token: {currentToken?.code} ({currentToken?.type === 'student' ? 'Siswa' : 'Guru'})
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <button
+                onClick={handleConfirmVote}
+                disabled={loading}
+                className="w-full btn-primary py-3 text-lg disabled:opacity-50"
+              >
+                {loading ? (
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white mx-auto"></div>
+                ) : (
+                  'Konfirmasi & Submit'
+                )}
+              </button>
+              
+              <button
+                onClick={() => setStep('voting')}
+                disabled={loading}
+                className="w-full btn-secondary py-3 text-lg disabled:opacity-50"
+              >
+                Kembali & Pilih Lain
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (step === 'complete') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-md text-center">
+          <div className="mx-auto h-20 w-20 bg-green-500 rounded-full flex items-center justify-center mb-6">
+            <Check className="h-10 w-10 text-white" />
+          </div>
+          
+          <h1 className="text-2xl font-bold text-gray-900 mb-4">Voting Berhasil!</h1>
+          <p className="text-gray-600 mb-8">
+            Terima kasih telah berpartisipasi dalam pemilihan ketua OSIS. 
+            Suara Anda telah tercatat dengan aman.
+          </p>
+          
+          <Link to="/" className="btn-primary">
+            Kembali ke Beranda
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+};
+
+export default VotingPage;
+
+
+
