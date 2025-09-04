@@ -1,9 +1,8 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { User, onAuthStateChanged } from 'firebase/auth';
-import { auth } from '../config/firebase';
+import pb from '../config/pocketbase';
 
 interface AuthContextType {
-  user: User | null;
+  user: any | null;
   loading: boolean;
 }
 
@@ -21,16 +20,22 @@ export const useAuth = () => {
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<any | null>(pb.authStore.model ?? null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
-      setLoading(false);
+    // Initialize from current auth state
+    setUser(pb.authStore.model ?? null);
+    setLoading(false);
+
+    // Subscribe to auth changes
+    const unsubscribe = pb.authStore.onChange(() => {
+      setUser(pb.authStore.model ?? null);
     });
 
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   const value = {

@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
-import { ref, get, update, push } from 'firebase/database';
-import { db } from '../config/firebase';
-import { Candidate, Token, Vote } from '../types';
+import pb from '../config/pocketbase';
+import { Candidate, Token } from '../types';
 import { Heart, Check, Key, ArrowLeft, Users, Vote as VoteIcon } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -20,21 +19,25 @@ const VotingPage = () => {
 
   const fetchCandidates = async () => {
     try {
-      const candidatesRef = ref(db, 'candidates');
-      const candidatesSnapshot = await get(candidatesRef);
-      const candidatesData: Candidate[] = [];
-      if (candidatesSnapshot.exists()) {
-        candidatesSnapshot.forEach((childSnapshot) => {
-          const data = childSnapshot.val();
-          candidatesData.push({
-            id: childSnapshot.key!,
-            ...data,
-            createdAt: data.createdAt ? new Date(data.createdAt) : new Date(),
-            updatedAt: data.updatedAt ? new Date(data.updatedAt) : new Date()
-          });
-        });
-      }
-      setCandidates(candidatesData);
+      const list = await pb.collection('candidates').getFullList({ sort: '-created', $autoCancel: false });
+      const mapped: Candidate[] = list.map((c: any) => {
+        let photoUrl = '';
+        if (c.photo) {
+          // If schema uses file field
+          try { photoUrl = pb.getFileUrl(c, c.photo); } catch { photoUrl = typeof c.photo === 'string' ? c.photo : ''; }
+        }
+        return {
+          id: c.id,
+          name: c.name,
+          photo: photoUrl,
+          vision: c.vision,
+          mission: c.mission,
+          class: c.class,
+          createdAt: c.created ? new Date(c.created) : new Date(),
+          updatedAt: c.updated ? new Date(c.updated) : new Date(),
+        };
+      });
+      setCandidates(mapped);
     } catch (error) {
       console.error('Error fetching candidates:', error);
       toast.error('Gagal memuat data kandidat');
@@ -46,42 +49,24 @@ const VotingPage = () => {
     setLoading(true);
 
     try {
-      const tokensRef = ref(db, 'tokens');
-      const tokenSnapshot = await get(tokensRef);
-
-      if (!tokenSnapshot.exists()) {
-        toast.error('Token tidak valid atau sudah digunakan');
-        return;
-      }
-
-      // Find unused token with matching code
-      let foundToken: Token | null = null;
-      let tokenId: string | null = null;
-      
-      tokenSnapshot.forEach((childSnapshot) => {
-        const data = childSnapshot.val();
-        if (data.code === token.toUpperCase() && !data.isUsed) {
-          foundToken = {
-            id: childSnapshot.key!,
-            ...data,
-            createdAt: data.createdAt ? new Date(data.createdAt) : new Date(),
-            usedAt: data.usedAt ? new Date(data.usedAt) : undefined
-          };
-          tokenId = childSnapshot.key!;
-        }
-      });
-
-      if (!foundToken || !tokenId) {
-        toast.error('Token tidak valid atau sudah digunakan');
-        return;
-      }
-
+      const code = token.toUpperCase();
+      const result = await pb.collection('tokens').getFirstListItem(`code = "${code}" && isUsed = false`);
+      const foundToken: Token = {
+        id: result.id,
+        code: result.code,
+        type: result.type,
+        class: result.class,
+        teacher: result.teacher,
+        isUsed: result.isUsed,
+        createdAt: result.created ? new Date(result.created) : new Date(),
+        usedAt: result.usedAt ? new Date(result.usedAt) : undefined,
+      };
       setCurrentToken(foundToken);
       setStep('voting');
       toast.success('Token valid! Silakan mulai voting');
     } catch (error) {
       console.error('Error validating token:', error);
-      toast.error('Gagal memvalidasi token');
+      toast.error('Token tidak valid atau sudah digunakan');
     } finally {
       setLoading(false);
     }
@@ -97,21 +82,16 @@ const VotingPage = () => {
 
     setLoading(true);
     try {
-      // Create vote record
-      const vote: Omit<Vote, 'id'> = {
+      const points = currentToken.type === 'student' ? 1 : 2;
+      await pb.collection('votes').create({
         candidateId: selectedCandidate.id,
         tokenId: currentToken.id,
-        points: currentToken.type === 'student' ? 1 : 2,
-        createdAt: new Date()
-      };
-      const votesRef = ref(db, 'votes');
-      await push(votesRef, vote);
+        points,
+      });
 
-      // Mark token as used
-      const tokenRef = ref(db, `tokens/${currentToken.id}`);
-      await update(tokenRef, {
+      await pb.collection('tokens').update(currentToken.id, {
         isUsed: true,
-        usedAt: new Date().toISOString()
+        usedAt: new Date().toISOString(),
       });
 
       setStep('complete');
@@ -227,7 +207,7 @@ const VotingPage = () => {
                                    {/* Image with overlay text information */}
                   <div className="relative">
                     <img
-                      src={candidate.photo || 'https://via.placeholder.com/400x480?text=No+Image'}
+                      src={candidate.photo || 'https://placehold.co/400x480?text=No+Image'}
                       alt={candidate.name}
                       className="w-full h-96 object-cover object-center"
                     />
@@ -305,7 +285,7 @@ const VotingPage = () => {
                 
                                  <div className="flex justify-center">
                    <img
-                     src={selectedCandidate.photo || 'https://via.placeholder.com/200x250?text=No+Image'}
+                     src={selectedCandidate.photo || 'https://placehold.co/200x250?text=No+Image'}
                      alt={selectedCandidate.name}
                      className="w-32 h-40 object-cover object-center rounded-lg shadow-md"
                    />

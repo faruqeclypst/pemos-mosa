@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../config/firebase';
+import pb from '../config/pocketbase';
 import { Shield, Eye, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -17,7 +16,8 @@ const AdminLogin = () => {
     setLoading(true);
 
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      // PocketBase: local auth with admins collection (adjust collection name as needed)
+      await pb.collection('admins').authWithPassword(email, password);
       toast.success('Login berhasil!');
       navigate('/admin/dashboard');
     } catch (error: any) {

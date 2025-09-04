@@ -1,8 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { signOut } from 'firebase/auth';
-import { auth, db } from '../config/firebase';
-import { ref, push, remove, update, onValue, get } from 'firebase/database';
+import pb from '../config/pocketbase';
 import { 
   Users, 
   Key, 
@@ -111,120 +109,173 @@ const AdminDashboard = () => {
 
 
   useEffect(() => {
-    // Set up real-time listeners
-    const candidatesRef = ref(db, 'candidates');
-    const tokensRef = ref(db, 'tokens');
-    const adminsRef = ref(db, 'admins');
-    const votesRef = ref(db, 'votes');
+    const loadAll = async () => {
+      try {
+        const [cList, tList, aList, vList] = await Promise.all([
+          pb.collection('candidates').getFullList({ sort: '-created', $autoCancel: false }),
+          pb.collection('tokens').getFullList({ sort: '-created', $autoCancel: false }),
+          pb.collection('admins').getFullList({ sort: '-created', $autoCancel: false }),
+          pb.collection('votes').getFullList({ sort: '-created', $autoCancel: false })
+        ]);
 
-    // Real-time listener for candidates
-    const candidatesUnsubscribe = onValue(candidatesRef, (snapshot) => {
-      const candidatesData: Candidate[] = [];
-      if (snapshot.exists()) {
-        snapshot.forEach((childSnapshot) => {
-          const data = childSnapshot.val();
-          candidatesData.push({
-            id: childSnapshot.key!,
-            ...data,
-            createdAt: data.createdAt ? new Date(data.createdAt) : new Date(),
-            updatedAt: data.updatedAt ? new Date(data.updatedAt) : new Date()
-          });
-        });
+        setCandidates(cList.map((c: any) => {
+          let photoUrl = '';
+          if (c.photo) {
+            try { photoUrl = pb.getFileUrl(c, c.photo); } catch { photoUrl = typeof c.photo === 'string' ? c.photo : ''; }
+          }
+          return {
+            id: c.id,
+            name: c.name,
+            photo: photoUrl,
+            vision: c.vision,
+            mission: c.mission,
+            class: c.class,
+            createdAt: c.created ? new Date(c.created) : new Date(),
+            updatedAt: c.updated ? new Date(c.updated) : new Date(),
+          };
+        }));
+
+        setTokens(tList.map((t: any) => ({
+          id: t.id,
+          code: t.code,
+          type: t.type,
+          class: t.class,
+          teacher: t.teacher,
+          isUsed: !!t.isUsed,
+          createdAt: t.created ? new Date(t.created) : new Date(),
+          usedAt: t.usedAt ? new Date(t.usedAt) : undefined,
+        })));
+
+        setAdmins(aList.map((a: any) => ({
+          id: a.id,
+          email: a.email,
+          name: a.name,
+          password: '',
+          role: a.role,
+          createdAt: a.created ? new Date(a.created) : new Date(),
+        })));
+
+        setVotes(vList.map((v: any) => ({
+          id: v.id,
+          candidateId: v.candidateId,
+          tokenId: v.tokenId,
+          points: v.points,
+          createdAt: v.created ? new Date(v.created) : new Date(),
+        })));
+
+        setIsConnected(true);
+      } catch (e) {
+        console.error('Initial load failed', e);
+        setIsConnected(false);
+      } finally {
+        setLoading(false);
+        setLastUpdate(new Date());
       }
-      setCandidates(candidatesData);
-      setLastUpdate(new Date());
-      setIsConnected(true);
-    }, (error) => {
-      console.error('Candidates listener error:', error);
-      setIsConnected(false);
+    };
+    loadAll();
+  }, []);
+
+  // Realtime subscriptions: keep UI in sync without manual refresh
+  useEffect(() => {
+    let unsubs: Array<() => void> = [];
+
+    const mapCandidate = (c: any) => {
+      let photoUrl = '';
+      if (c.photo) {
+        try { photoUrl = pb.getFileUrl(c, c.photo); } catch { photoUrl = typeof c.photo === 'string' ? c.photo : ''; }
+      }
+      return {
+        id: c.id,
+        name: c.name,
+        photo: photoUrl,
+        vision: c.vision,
+        mission: c.mission,
+        class: c.class,
+        createdAt: c.created ? new Date(c.created) : new Date(),
+        updatedAt: c.updated ? new Date(c.updated) : new Date(),
+      } as Candidate;
+    };
+
+    const mapToken = (t: any) => ({
+      id: t.id,
+      code: t.code,
+      type: t.type,
+      class: t.class,
+      teacher: t.teacher,
+      isUsed: !!t.isUsed,
+      createdAt: t.created ? new Date(t.created) : new Date(),
+      usedAt: t.usedAt ? new Date(t.usedAt) : undefined,
+    } as Token);
+
+    const mapAdmin = (a: any) => ({
+      id: a.id,
+      email: a.email,
+      name: a.name,
+      password: '',
+      role: a.role,
+      createdAt: a.created ? new Date(a.created) : new Date(),
+    } as Admin);
+
+    const mapVote = (v: any) => ({
+      id: v.id,
+      candidateId: v.candidateId,
+      tokenId: v.tokenId,
+      points: v.points,
+      createdAt: v.created ? new Date(v.created) : new Date(),
     });
 
-    // Real-time listener for tokens
-    const tokensUnsubscribe = onValue(tokensRef, (snapshot) => {
-      const tokensData: Token[] = [];
-      if (snapshot.exists()) {
-        snapshot.forEach((childSnapshot) => {
-          const data = childSnapshot.val();
-          tokensData.push({
-            id: childSnapshot.key!,
-            ...data,
-            createdAt: data.createdAt ? new Date(data.createdAt) : new Date(),
-            usedAt: data.usedAt ? new Date(data.usedAt) : undefined
+    const setup = async () => {
+      try {
+        const unsubCandidates = await pb.collection('candidates').subscribe('*', (e: any) => {
+          setCandidates(prev => {
+            const rec = mapCandidate(e.record);
+            if (e.action === 'delete') return prev.filter(c => c.id !== e.record.id);
+            const exists = prev.some(c => c.id === rec.id);
+            return exists ? prev.map(c => c.id === rec.id ? rec : c) : [rec, ...prev];
           });
         });
-      }
-      setTokens(tokensData);
-      setLastUpdate(new Date());
-      setIsConnected(true);
-    }, (error) => {
-      console.error('Tokens listener error:', error);
-      setIsConnected(false);
-    });
+        unsubs.push(unsubCandidates);
 
-    // Real-time listener for admins
-    const adminsUnsubscribe = onValue(adminsRef, (snapshot) => {
-      const adminsData: Admin[] = [];
-      if (snapshot.exists()) {
-        snapshot.forEach((childSnapshot) => {
-          const data = childSnapshot.val();
-          adminsData.push({
-            id: childSnapshot.key!,
-            ...data,
-            createdAt: data.createdAt ? new Date(data.createdAt) : new Date()
+        const unsubTokens = await pb.collection('tokens').subscribe('*', (e: any) => {
+          setTokens(prev => {
+            const rec = mapToken(e.record);
+            if (e.action === 'delete') return prev.filter(t => t.id !== e.record.id);
+            const exists = prev.some(t => t.id === rec.id);
+            return exists ? prev.map(t => t.id === rec.id ? rec : t) : [rec, ...prev];
           });
         });
-      }
-      setAdmins(adminsData);
-      setLastUpdate(new Date());
-      setIsConnected(true);
-    }, (error) => {
-      console.error('Admins listener error:', error);
-      setIsConnected(false);
-    });
+        unsubs.push(unsubTokens);
 
-    // Real-time listener for votes with debouncing
-    const votesUnsubscribe = onValue(votesRef, (snapshot) => {
-      const votesData: any[] = [];
-      if (snapshot.exists()) {
-        snapshot.forEach((childSnapshot) => {
-          const data = childSnapshot.val();
-          votesData.push({
-            id: childSnapshot.key!,
-            ...data,
-            createdAt: data.createdAt ? new Date(data.createdAt) : new Date()
+        const unsubAdmins = await pb.collection('admins').subscribe('*', (e: any) => {
+          setAdmins(prev => {
+            const rec = mapAdmin(e.record);
+            if (e.action === 'delete') return prev.filter(a => a.id !== e.record.id);
+            const exists = prev.some(a => a.id === rec.id);
+            return exists ? prev.map(a => a.id === rec.id ? rec : a) : [rec, ...prev];
           });
         });
+        unsubs.push(unsubAdmins);
+
+        const unsubVotes = await pb.collection('votes').subscribe('*', (e: any) => {
+          setVotes(prev => {
+            const rec = mapVote(e.record);
+            if (e.action === 'delete') return prev.filter(v => v.id !== e.record.id);
+            const exists = prev.some(v => v.id === rec.id);
+            return exists ? prev.map(v => v.id === rec.id ? rec : v) : [rec, ...prev];
+          });
+          // smooth update marker for charts
+          setTimeout(() => setLastUpdate(new Date()), 300);
+        });
+        unsubs.push(unsubVotes);
+      } catch (err) {
+        console.error('Realtime subscribe error:', err);
       }
-      
-      // Only update if votes data actually changed to prevent unnecessary re-renders
-      setVotes(prevVotes => {
-        const prevVotesString = JSON.stringify(prevVotes.map(v => ({ id: v.id, points: v.points, candidateId: v.candidateId })));
-        const newVotesString = JSON.stringify(votesData.map(v => ({ id: v.id, points: v.points, candidateId: v.candidateId })));
-        
-        if (prevVotesString !== newVotesString) {
-          // Debounce last update to reduce chart re-renders
-          setTimeout(() => {
-            setLastUpdate(new Date());
-          }, 1000);
-          return votesData;
-        }
-        return prevVotes;
-      });
-      
-      setIsConnected(true);
-    }, (error) => {
-      console.error('Votes listener error:', error);
-      setIsConnected(false);
-    });
+    };
 
-    setLoading(false);
+    setup();
 
-    // Cleanup listeners on unmount
     return () => {
-      candidatesUnsubscribe();
-      tokensUnsubscribe();
-      adminsUnsubscribe();
-      votesUnsubscribe();
+      try { unsubs.forEach(u => u && u()); } catch {}
     };
   }, []);
 
@@ -232,7 +283,7 @@ const AdminDashboard = () => {
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      pb.authStore.clear();
       navigate('/admin/login');
     } catch (error) {
       console.error('Logout error:', error);
@@ -251,32 +302,31 @@ const AdminDashboard = () => {
   const handleAddCandidate = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      let photoUrl = candidateForm.photo;
-      
-      // If there's a file uploaded, convert it to base64
+      // If schema photo is file: use FormData; else if text URL, send as field
       if (candidateForm.photoFile) {
-        const reader = new FileReader();
-        photoUrl = await new Promise((resolve) => {
-          reader.onload = (e) => {
-            resolve(e.target?.result as string);
-          };
-          reader.readAsDataURL(candidateForm.photoFile!);
-        });
+        const formData = new FormData();
+        formData.append('name', candidateForm.name);
+        formData.append('vision', candidateForm.vision);
+        formData.append('mission', candidateForm.mission);
+        if (candidateForm.class) formData.append('class', candidateForm.class);
+        formData.append('photo', candidateForm.photoFile);
+        await pb.collection('candidates').create(formData);
+      } else {
+        const payload: any = {
+          name: candidateForm.name,
+          vision: candidateForm.vision,
+          mission: candidateForm.mission,
+        };
+        if (candidateForm.class) payload.class = candidateForm.class;
+        if (candidateForm.photo) payload.photo = candidateForm.photo; // only if your schema uses text
+        await pb.collection('candidates').create(payload);
       }
-      
-      const newCandidate = {
-        ...candidateForm,
-        photo: photoUrl,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      const candidatesRef = ref(db, 'candidates');
-      await push(candidatesRef, newCandidate);
       setCandidateForm({ name: '', photo: '', photoFile: null, vision: '', mission: '', class: '' });
       setShowAddCandidate(false);
       toast.success('Kandidat berhasil ditambahkan');
     } catch (error) {
       console.error('Error adding candidate:', error);
+      try { console.error('Details:', (error as any)?.data); } catch {}
       toast.error('Gagal menambahkan kandidat');
     }
   };
@@ -303,9 +353,8 @@ const AdminDashboard = () => {
         tokensToAdd.push(token);
       }
       
-      const tokensRef = ref(db, 'tokens');
       for (const token of tokensToAdd) {
-        await push(tokensRef, token);
+        await pb.collection('tokens').create(token);
       }
       
       setTokenForm({ type: 'student', class: '', count: 1 });
@@ -320,12 +369,13 @@ const AdminDashboard = () => {
   const handleAddAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const newAdmin = {
-        ...adminForm,
-        createdAt: new Date().toISOString()
-      };
-      const adminsRef = ref(db, 'admins');
-      await push(adminsRef, newAdmin);
+      await pb.collection('admins').create({
+        email: adminForm.email,
+        name: adminForm.name,
+        role: adminForm.role,
+        password: adminForm.password,
+        passwordConfirm: adminForm.password,
+      });
       setAdminForm({ email: '', name: '', password: '', role: 'admin' });
       setShowAddAdmin(false);
       toast.success('Admin berhasil ditambahkan');
@@ -343,8 +393,7 @@ const AdminDashboard = () => {
       cancelText: 'Batal',
       onConfirm: async () => {
         try {
-          const candidateRef = ref(db, `candidates/${id}`);
-          await remove(candidateRef);
+          await pb.collection('candidates').delete(id);
           toast.success('Kandidat berhasil dihapus');
         } catch (error) {
           console.error('Error deleting candidate:', error);
@@ -374,25 +423,24 @@ const AdminDashboard = () => {
     if (!editingCandidate) return;
 
     try {
-      let photoUrl = candidateForm.photo;
-      
-      // If there's a file uploaded, convert it to base64
       if (candidateForm.photoFile) {
-        const reader = new FileReader();
-        photoUrl = await new Promise((resolve) => {
-          reader.onload = (e) => {
-            resolve(e.target?.result as string);
-          };
-          reader.readAsDataURL(candidateForm.photoFile!);
-        });
+        const formData = new FormData();
+        formData.append('name', candidateForm.name);
+        formData.append('vision', candidateForm.vision);
+        formData.append('mission', candidateForm.mission);
+        if (candidateForm.class) formData.append('class', candidateForm.class);
+        formData.append('photo', candidateForm.photoFile);
+        await pb.collection('candidates').update(editingCandidate.id, formData);
+      } else {
+        const payload: any = {
+          name: candidateForm.name,
+          vision: candidateForm.vision,
+          mission: candidateForm.mission,
+        };
+        if (candidateForm.class) payload.class = candidateForm.class;
+        if (candidateForm.photo) payload.photo = candidateForm.photo; // only if schema is text URL
+        await pb.collection('candidates').update(editingCandidate.id, payload);
       }
-      
-      const candidateRef = ref(db, `candidates/${editingCandidate.id}`);
-      await update(candidateRef, {
-        ...candidateForm,
-        photo: photoUrl,
-        updatedAt: new Date().toISOString()
-      });
       
       setCandidateForm({ name: '', photo: '', photoFile: null, vision: '', mission: '', class: '' });
       setEditingCandidate(null);
@@ -400,6 +448,7 @@ const AdminDashboard = () => {
       toast.success('Kandidat berhasil diperbarui');
     } catch (error) {
       console.error('Error updating candidate:', error);
+      try { console.error('Details:', (error as any)?.data); } catch {}
       toast.error('Gagal memperbarui kandidat');
     }
   };
@@ -412,8 +461,7 @@ const AdminDashboard = () => {
       cancelText: 'Batal',
       onConfirm: async () => {
         try {
-          const adminRef = ref(db, `admins/${id}`);
-          await remove(adminRef);
+          await pb.collection('admins').delete(id);
           toast.success('Admin berhasil dihapus');
         } catch (error) {
           console.error('Error deleting admin:', error);
@@ -440,13 +488,11 @@ const AdminDashboard = () => {
             // Find and remove the vote first
             const voteToRemove = votes.find(vote => vote.tokenId === id);
             if (voteToRemove) {
-              const voteRef = ref(db, `votes/${voteToRemove.id}`);
-              await remove(voteRef);
+              await pb.collection('votes').delete(voteToRemove.id);
             }
             
             // Then remove the token
-            const tokenRef = ref(db, `tokens/${id}`);
-            await remove(tokenRef);
+            await pb.collection('tokens').delete(id);
             toast.success('Token dan vote berhasil dihapus');
           } catch (error) {
             console.error('Error deleting token:', error);
@@ -464,8 +510,7 @@ const AdminDashboard = () => {
         cancelText: 'Batal',
         onConfirm: async () => {
           try {
-            const tokenRef = ref(db, `tokens/${id}`);
-            await remove(tokenRef);
+            await pb.collection('tokens').delete(id);
             toast.success('Token berhasil dihapus');
           } catch (error) {
             console.error('Error deleting token:', error);
@@ -497,25 +542,13 @@ const AdminDashboard = () => {
       onConfirm: async () => {
         try {
           // Delete all votes
-          const votesRef = ref(db, 'votes');
-          await remove(votesRef);
+          // Delete all votes
+          const allVotes = await pb.collection('votes').getFullList();
+          await Promise.all(allVotes.map((v: any) => pb.collection('votes').delete(v.id)));
           
           // Reset all tokens to available
-          const tokensRef = ref(db, 'tokens');
-          const tokensSnapshot = await get(tokensRef);
-          if (tokensSnapshot.exists()) {
-            const updatePromises: Promise<void>[] = [];
-            tokensSnapshot.forEach((childSnapshot: any) => {
-              const tokenId = childSnapshot.key!;
-              const tokenRef = ref(db, `tokens/${tokenId}`);
-              updatePromises.push(update(tokenRef, {
-                isUsed: false,
-                usedAt: null,
-                updatedAt: new Date().toISOString()
-              }));
-            });
-            await Promise.all(updatePromises);
-          }
+          const allTokens = await pb.collection('tokens').getFullList();
+          await Promise.all(allTokens.map((t: any) => pb.collection('tokens').update(t.id, { isUsed: false, usedAt: null })));
           
           toast.success('Semua voting berhasil direset dan token dikembalikan menjadi tersedia');
         } catch (error) {
@@ -559,26 +592,15 @@ const AdminDashboard = () => {
           
           if (voteToRemove) {
             // Remove the vote
-            const voteRef = ref(db, `votes/${voteToRemove.id}`);
-            await remove(voteRef);
+            await pb.collection('votes').delete(voteToRemove.id);
             
             // Update token status
-            const tokenRef = ref(db, `tokens/${tokenId}`);
-            await update(tokenRef, {
-              isUsed: false,
-              usedAt: null,
-              updatedAt: new Date().toISOString()
-            });
+            await pb.collection('tokens').update(tokenId, { isUsed: false, usedAt: null });
             
             toast.success('Token berhasil diubah menjadi tersedia dan vote telah dihapus');
           } else {
             // If no vote found, just update token status
-            const tokenRef = ref(db, `tokens/${tokenId}`);
-            await update(tokenRef, {
-              isUsed: false,
-              usedAt: null,
-              updatedAt: new Date().toISOString()
-            });
+            await pb.collection('tokens').update(tokenId, { isUsed: false, usedAt: null });
             
             toast.success('Token berhasil diubah menjadi tersedia');
           }
@@ -697,15 +719,13 @@ const AdminDashboard = () => {
       onConfirm: async () => {
         try {
           if (includeVotes) {
-            // Delete all votes first
-            const votesRef = ref(db, 'votes');
-            await remove(votesRef);
+            const allVotes = await pb.collection('votes').getFullList();
+            await Promise.all(allVotes.map((v: any) => pb.collection('votes').delete(v.id)));
             toast.success('Semua data voting berhasil dihapus');
           }
-          
-          // Delete all tokens
-          const tokensRef = ref(db, 'tokens');
-          await remove(tokensRef);
+
+          const allTokens = await pb.collection('tokens').getFullList();
+          await Promise.all(allTokens.map((t: any) => pb.collection('tokens').delete(t.id)));
           
           toast.success(includeVotes 
             ? 'Semua token dan data voting berhasil dihapus' 
@@ -804,16 +824,15 @@ const AdminDashboard = () => {
           const newVotePoints = firstVote.points + difference;
           
           if (newVotePoints > 0) {
-            update(ref(db, `votes/${firstVote.id}`), {
-              points: newVotePoints,
-              updatedAt: new Date().toISOString()
-            }).then(() => {
-              setLastUpdate(new Date());
-              toast.success(`Total poin ${result.candidate.name} berhasil diubah dari ${result.totalPoints} menjadi ${newPointsValue}`);
-            }).catch((error) => {
-              console.error('Error updating vote:', error);
-              toast.error('Gagal mengubah total poin');
-            });
+            pb.collection('votes').update(firstVote.id, { points: newVotePoints })
+              .then(() => {
+                setLastUpdate(new Date());
+                toast.success(`Total poin ${result.candidate.name} berhasil diubah dari ${result.totalPoints} menjadi ${newPointsValue}`);
+              })
+              .catch((error: unknown) => {
+                console.error('Error updating vote:', error);
+                toast.error('Gagal mengubah total poin');
+              });
           } else {
             toast.error('Total poin tidak boleh kurang dari 0');
           }
@@ -1284,7 +1303,7 @@ const AdminDashboard = () => {
                   {/* Image with overlay text information */}
                   <div className="relative mb-4">
                     <img
-                      src={candidate.photo || 'https://via.placeholder.com/400x480?text=No+Image'}
+                      src={candidate.photo || 'https://placehold.co/400x480?text=No+Image'}
                       alt={candidate.name}
                       className="w-full h-96 object-cover object-center rounded-lg shadow-md"
                     />
@@ -2119,7 +2138,7 @@ const AdminDashboard = () => {
                                     <td className="px-6 py-4 whitespace-nowrap">
                                       <div className="flex items-center">
                                         <img
-                                          src={result.candidate.photo || 'https://via.placeholder.com/40x40?text=No+Image'}
+                                          src={result.candidate.photo || 'https://placehold.co/40x40?text=No+Image'}
                                           alt={result.candidate.name}
                                           className="w-10 h-10 rounded-full object-cover object-center mr-3"
                                         />
@@ -2348,7 +2367,7 @@ const AdminDashboard = () => {
                                       <td className="px-6 py-4 whitespace-nowrap">
                                         <div className="flex items-center">
                                           <img
-                                            src={candidate?.photo || 'https://via.placeholder.com/32x32?text=No+Image'}
+                                            src={candidate?.photo || 'https://placehold.co/32x32?text=No+Image'}
                                             alt={candidate?.name}
                                             className="w-8 h-8 rounded-full object-cover object-center mr-3"
                                           />
