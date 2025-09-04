@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { signOut } from 'firebase/auth';
 import { auth, db } from '../config/firebase';
@@ -29,7 +29,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState('candidates');
   const [tokenTab, setTokenTab] = useState('all');
-  const [resultsTab, setResultsTab] = useState('overview');
+  const [resultsTab, setResultsTab] = useState('ranking');
 
   const [chartType, setChartType] = useState('bar');
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -59,6 +59,9 @@ const AdminDashboard = () => {
   const [showAddAdmin, setShowAddAdmin] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [showExportDropdown, setShowExportDropdown] = useState(false);
+  const [showDeleteAllDropdown, setShowDeleteAllDropdown] = useState(false);
+  const [jumpToPage, setJumpToPage] = useState('');
   const [confirmModalData, setConfirmModalData] = useState<{
     title: string;
     message: string;
@@ -104,6 +107,8 @@ const AdminDashboard = () => {
 
     return () => clearInterval(timer);
   }, []);
+
+
 
   useEffect(() => {
     // Set up real-time listeners
@@ -190,11 +195,22 @@ const AdminDashboard = () => {
           });
         });
       }
-      setVotes(votesData);
-      // Debounce last update to reduce chart re-renders
-      setTimeout(() => {
-        setLastUpdate(new Date());
-      }, 500);
+      
+      // Only update if votes data actually changed to prevent unnecessary re-renders
+      setVotes(prevVotes => {
+        const prevVotesString = JSON.stringify(prevVotes.map(v => ({ id: v.id, points: v.points, candidateId: v.candidateId })));
+        const newVotesString = JSON.stringify(votesData.map(v => ({ id: v.id, points: v.points, candidateId: v.candidateId })));
+        
+        if (prevVotesString !== newVotesString) {
+          // Debounce last update to reduce chart re-renders
+          setTimeout(() => {
+            setLastUpdate(new Date());
+          }, 1000);
+          return votesData;
+        }
+        return prevVotes;
+      });
+      
       setIsConnected(true);
     }, (error) => {
       console.error('Votes listener error:', error);
@@ -475,7 +491,7 @@ const AdminDashboard = () => {
   const handleResetAllVoting = async () => {
     showConfirmDialog({
       title: 'Reset Semua Voting',
-      message: '⚠️ PERHATIAN: Ini akan menghapus SEMUA data voting dan mengembalikan semua token menjadi tersedia. Tindakan ini tidak dapat dibatalkan. Apakah Anda yakin ingin melanjutkan?',
+      message: 'PERHATIAN: Ini akan menghapus SEMUA data voting dan mengembalikan semua token menjadi tersedia. Tindakan ini tidak dapat dibatalkan. Apakah Anda yakin ingin melanjutkan?',
       confirmText: 'Reset Semua Data',
       cancelText: 'Batal',
       onConfirm: async () => {
@@ -627,8 +643,87 @@ const AdminDashboard = () => {
     return Math.ceil(filtered.length / tokensPerPage);
   };
 
+  // Function to get pagination range with max 5 pages visible
+  const getPaginationRange = () => {
+    const totalPages = getTotalPages();
+    const maxVisiblePages = 5;
+    
+    if (totalPages <= maxVisiblePages) {
+      // If total pages <= 5, show all pages
+      return Array.from({ length: totalPages }, (_, i) => i + 1);
+    }
+    
+    // If total pages > 5, show sliding window of 5 pages
+    let startPage = Math.max(1, currentPage - 2);
+    let endPage = startPage + maxVisiblePages - 1;
+    
+    // Adjust if end page exceeds total pages
+    if (endPage > totalPages) {
+      endPage = totalPages;
+      startPage = Math.max(1, endPage - maxVisiblePages + 1);
+    }
+    
+    // Return only the visible page range
+    return Array.from({ length: endPage - startPage + 1 }, (_, i) => startPage + i);
+  };
+
   const handlePageChange = (page: number) => {
     setCurrentPage(page);
+  };
+
+  const handleJumpToPage = () => {
+    const pageNumber = parseInt(jumpToPage);
+    if (pageNumber && pageNumber >= 1 && pageNumber <= getTotalPages()) {
+      setCurrentPage(pageNumber);
+      setJumpToPage('');
+    }
+  };
+
+  const handleJumpToPageKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleJumpToPage();
+    }
+  };
+
+  // Function to delete all tokens
+  const handleDeleteAllTokens = (includeVotes: boolean = false) => {
+    setConfirmModalData({
+      title: 'Hapus Semua Token',
+      message: includeVotes 
+        ? 'Apakah Anda yakin ingin menghapus SEMUA token dan data voting? Tindakan ini tidak dapat dibatalkan!'
+        : 'Apakah Anda yakin ingin menghapus SEMUA token? Data voting akan tetap tersimpan.',
+      confirmText: 'Ya, Hapus Semua',
+      cancelText: 'Batal',
+      onConfirm: async () => {
+        try {
+          if (includeVotes) {
+            // Delete all votes first
+            const votesRef = ref(db, 'votes');
+            await remove(votesRef);
+            toast.success('Semua data voting berhasil dihapus');
+          }
+          
+          // Delete all tokens
+          const tokensRef = ref(db, 'tokens');
+          await remove(tokensRef);
+          
+          toast.success(includeVotes 
+            ? 'Semua token dan data voting berhasil dihapus' 
+            : 'Semua token berhasil dihapus'
+          );
+          
+          // Close modal after successful operation
+          setShowConfirmModal(false);
+        } catch (error) {
+          console.error('Error deleting tokens:', error);
+          toast.error('Gagal menghapus token');
+          // Close modal even on error
+          setShowConfirmModal(false);
+        }
+      },
+      type: 'danger'
+    });
+    setShowConfirmModal(true);
   };
 
   // Sorting and search functions
@@ -849,6 +944,153 @@ const AdminDashboard = () => {
     toast.success(`Token berhasil diexport untuk ${uniqueClasses.length} kelas dalam 1 file`);
   };
 
+  // Function to export teacher tokens specifically
+  const exportTeacherTokens = () => {
+    const teacherTokens = tokens.filter(token => token.type === 'teacher');
+    
+    if (teacherTokens.length === 0) {
+      toast.error('Tidak ada token guru yang tersedia untuk export');
+      return;
+    }
+
+    // Create CSV content for teacher tokens
+    let csvContent = "data:text/csv;charset=utf-8,";
+    
+    // Add header
+    csvContent += "=== TOKEN GURU ===\n\n";
+    csvContent += "Token,Status,Tanggal Dibuat\n";
+    
+    // Add teacher tokens
+    teacherTokens.forEach(token => {
+      const row = [
+        token.code,
+        token.isUsed ? 'Terpakai' : 'Tersedia',
+        new Date(token.createdAt).toLocaleDateString('id-ID')
+      ].join(';'); // Use semicolon instead of comma
+      csvContent += row + '\n';
+    });
+    
+    // Add summary
+    const availableTokens = teacherTokens.filter(token => !token.isUsed).length;
+    const usedTokens = teacherTokens.filter(token => token.isUsed).length;
+    
+    csvContent += '\n=== RINGKASAN TOKEN GURU ===\n';
+    csvContent += `Total Token: ${teacherTokens.length}\n`;
+    csvContent += `Tersedia: ${availableTokens}\n`;
+    csvContent += `Terpakai: ${usedTokens}\n`;
+    csvContent += `Persentase Terpakai: ${teacherTokens.length > 0 ? Math.round((usedTokens / teacherTokens.length) * 100) : 0}%\n`;
+    
+    // Create download link
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `tokens_guru_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    toast.success(`Token guru berhasil diexport (${teacherTokens.length} token)`);
+  };
+
+  // Function to export all tokens (both student and teacher) in one file
+  const exportAllTokens = () => {
+    const studentTokens = tokens.filter(token => token.type === 'student');
+    const teacherTokens = tokens.filter(token => token.type === 'teacher');
+    
+    if (tokens.length === 0) {
+      toast.error('Tidak ada token yang tersedia untuk export');
+      return;
+    }
+
+    // Create CSV content for all tokens
+    let csvContent = "data:text/csv;charset=utf-8,";
+    
+    // Add header
+    csvContent += "=== SEMUA TOKEN ===\n\n";
+    
+    // Export teacher tokens section
+    if (teacherTokens.length > 0) {
+      csvContent += "--- TOKEN GURU ---\n";
+      csvContent += "Token,Status,Tanggal Dibuat\n";
+      
+      teacherTokens.forEach(token => {
+        const row = [
+          token.code,
+          token.isUsed ? 'Terpakai' : 'Tersedia',
+          new Date(token.createdAt).toLocaleDateString('id-ID')
+        ].join(';');
+        csvContent += row + '\n';
+      });
+      
+      const availableTeacherTokens = teacherTokens.filter(token => !token.isUsed).length;
+      const usedTeacherTokens = teacherTokens.filter(token => token.isUsed).length;
+      
+      csvContent += `\nRingkasan Guru:\n`;
+      csvContent += `Total Token: ${teacherTokens.length}\n`;
+      csvContent += `Tersedia: ${availableTeacherTokens}\n`;
+      csvContent += `Terpakai: ${usedTeacherTokens}\n`;
+      csvContent += `Persentase: ${teacherTokens.length > 0 ? Math.round((usedTeacherTokens / teacherTokens.length) * 100) : 0}%\n\n`;
+    }
+    
+    // Export student tokens by class
+    const uniqueClasses = getUniqueClasses();
+    if (uniqueClasses.length > 0) {
+      csvContent += "--- TOKEN SISWA PER KELAS ---\n";
+      
+      uniqueClasses.forEach((className) => {
+        const classTokens = studentTokens.filter(token => token.class === className);
+        
+        if (classTokens.length > 0) {
+          csvContent += `\n${className} (${classTokens.length} token):\n`;
+          csvContent += "Token,Kelas,Status,Tanggal Dibuat\n";
+          
+          classTokens.forEach(token => {
+            const row = [
+              token.code,
+              token.class,
+              token.isUsed ? 'Terpakai' : 'Tersedia',
+              new Date(token.createdAt).toLocaleDateString('id-ID')
+            ].join(';');
+            csvContent += row + '\n';
+          });
+          
+          const availableClassTokens = classTokens.filter(token => !token.isUsed).length;
+          const usedClassTokens = classTokens.filter(token => token.isUsed).length;
+          csvContent += `Ringkasan ${className}: Total: ${classTokens.length}, Tersedia: ${availableClassTokens}, Terpakai: ${usedClassTokens}\n`;
+        }
+      });
+    }
+    
+    // Add overall summary
+    const totalAvailable = tokens.filter(token => !token.isUsed).length;
+    const totalUsed = tokens.filter(token => token.isUsed).length;
+    
+    csvContent += '\n=== RINGKASAN KESELURUHAN ===\n';
+    csvContent += `Total Token: ${tokens.length}\n`;
+    csvContent += `Total Guru: ${teacherTokens.length}\n`;
+    csvContent += `Total Siswa: ${studentTokens.length}\n`;
+    csvContent += `Total Tersedia: ${totalAvailable}\n`;
+    csvContent += `Total Terpakai: ${totalUsed}\n`;
+    csvContent += `Persentase Terpakai: ${tokens.length > 0 ? Math.round((totalUsed / tokens.length) * 100) : 0}%\n`;
+    
+    // Create download link
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `semua_tokens_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    toast.success(`Semua token berhasil diexport (${tokens.length} token)`);
+  };
+
+  // Stable color mapping untuk konsistensi visual
+  const getChartColor = useCallback((index: number) => {
+    const colors = ['#fbbf24', '#3b82f6', '#10b981', '#8b5cf6', '#ef4444', '#06b6d4', '#84cc16', '#a855f7'];
+    return colors[index % colors.length];
+  }, []);
+
   // Memoized chart data untuk performa yang lebih baik dengan throttling
   const pieChartData = useMemo(() => {
     const results = getVotingResults();
@@ -866,16 +1108,16 @@ const AdminDashboard = () => {
       return results.map((result, index) => ({
         name: result.candidate.name,
         value: 1, // Minimal value untuk pie chart
-        color: index === 0 ? '#fbbf24' : index === 1 ? '#3b82f6' : index === 2 ? '#10b981' : '#8b5cf6'
+        color: getChartColor(index)
       }));
     }
     
     return validResults.map((result, index) => ({
       name: result.candidate.name,
       value: result.totalPoints,
-      color: index === 0 ? '#fbbf24' : index === 1 ? '#3b82f6' : index === 2 ? '#10b981' : '#8b5cf6'
+      color: getChartColor(index)
     }));
-  }, [getVotingResults]); // Dependency array untuk memoization
+  }, [candidates, votes, getChartColor]); // Direct dependencies instead of getVotingResults function
 
   const barChartData = useMemo(() => {
     const results = getVotingResults();
@@ -889,10 +1131,48 @@ const AdminDashboard = () => {
       name: result.candidate.name,
       points: result.totalPoints,
       votes: result.totalVotes,
-      color: index === 0 ? '#fbbf24' : index === 1 ? '#3b82f6' : index === 2 ? '#10b981' : '#8b5cf6'
+      color: getChartColor(index)
     }));
-  }, [getVotingResults]); // Dependency array untuk memoization
+  }, [candidates, votes, getChartColor]); // Direct dependencies instead of getVotingResults function
 
+  // Debounced chart update to prevent blinking
+  const [debouncedChartData, setDebouncedChartData] = useState<any[]>([]);
+  const prevChartDataRef = useRef<any[]>([]);
+  
+  useEffect(() => {
+    // Only update if data actually changed
+    const dataChanged = JSON.stringify(pieChartData) !== JSON.stringify(prevChartDataRef.current);
+    
+    if (dataChanged) {
+      const timer = setTimeout(() => {
+        setDebouncedChartData(pieChartData);
+        prevChartDataRef.current = pieChartData;
+      }, 300); // 300ms delay to prevent rapid updates
+
+      return () => clearTimeout(timer);
+    }
+  }, [pieChartData]);
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Element;
+      if (!target.closest('.export-dropdown')) {
+        setShowExportDropdown(false);
+      }
+      if (!target.closest('.delete-all-dropdown')) {
+        setShowDeleteAllDropdown(false);
+      }
+    };
+
+    if (showExportDropdown || showDeleteAllDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showExportDropdown, showDeleteAllDropdown]);
 
 
   if (loading) {
@@ -1060,28 +1340,143 @@ const AdminDashboard = () => {
              <div className="flex justify-between items-center mb-6">
                <h2 className="text-xl font-semibold text-gray-900">Daftar Token</h2>
                <div className="flex space-x-3">
+                                   {/* Export Dropdown */}
+                  <div className="relative export-dropdown">
+                    <button
+                      onClick={() => setShowExportDropdown(!showExportDropdown)}
+                      className="btn-secondary flex items-center"
+                    >
+                      <Download className="h-4 w-4 mr-2" />
+                      Export
+                      <svg className="ml-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                    
+                    {/* Dropdown Menu */}
+                    {showExportDropdown && (
+                      <div className="absolute right-0 mt-2 w-56 bg-white rounded-md shadow-lg border border-gray-200 z-50 export-dropdown transform transition-all duration-200 ease-out">
+                        <div className="py-1">
+                          <div className="px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-100">
+                            Pilih Jenis Export
+                          </div>
+                          <button
+                            onClick={() => {
+                              exportTokensToExcel();
+                              setShowExportDropdown(false);
+                            }}
+                            className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 flex items-center transition-colors"
+                          >
+                            <Download className="h-4 w-4 mr-3 text-blue-600" />
+                            <div>
+                              <div className="font-medium">Export Excel</div>
+                              <div className="text-xs text-gray-500">Format Excel standar</div>
+                            </div>
+                          </button>
+                          <button
+                            onClick={() => {
+                              exportTeacherTokens();
+                              setShowExportDropdown(false);
+                            }}
+                            className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-green-50 hover:text-green-700 flex items-center transition-colors"
+                          >
+                            <Download className="h-4 w-4 mr-3 text-green-600" />
+                            <div>
+                              <div className="font-medium">Export Token Guru</div>
+                              <div className="text-xs text-gray-500">Hanya token guru</div>
+                            </div>
+                          </button>
+                          <button
+                            onClick={() => {
+                              exportTokensPerClass();
+                              setShowExportDropdown(false);
+                            }}
+                            className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-purple-50 hover:text-purple-700 flex items-center transition-colors"
+                          >
+                            <Download className="h-4 w-4 mr-3 text-purple-600" />
+                            <div>
+                              <div className="font-medium">Export per Kelas</div>
+                              <div className="text-xs text-gray-500">Token siswa per kelas</div>
+                            </div>
+                          </button>
+                          <button
+                            onClick={() => {
+                              exportAllTokens();
+                              setShowExportDropdown(false);
+                            }}
+                            className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-orange-50 hover:text-orange-700 flex items-center transition-colors"
+                          >
+                            <Download className="h-4 w-4 mr-3 text-orange-600" />
+                            <div>
+                              <div className="font-medium">Export Semua Token</div>
+                              <div className="text-xs text-gray-500">Guru + siswa lengkap</div>
+                            </div>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                                    <button
-                    onClick={exportTokensToExcel}
-                    className="btn-secondary flex items-center"
+                    onClick={() => setShowAddToken(true)}
+                    className="btn-primary flex items-center"
                   >
-                    <Download className="h-4 w-4 mr-2" />
-                    Export Excel
+                    <Key className="h-4 w-4 mr-2" />
+                    Generate Token
                   </button>
-                  <button
-                    onClick={exportTokensPerClass}
-                    className="btn-secondary flex items-center"
-                  >
-                    <Download className="h-4 w-4 mr-2" />
-                    Export per Kelas
-                  </button>
-                 <button
-                   onClick={() => setShowAddToken(true)}
-                   className="btn-primary flex items-center"
-                 >
-                   <Key className="h-4 w-4 mr-2" />
-                   Generate Token
-                 </button>
-               </div>
+                  
+                  {/* Delete All Tokens Dropdown - Only show if there are tokens */}
+                  {tokens.length > 0 && (
+                    <div className="relative delete-all-dropdown">
+                      <button
+                        onClick={() => setShowDeleteAllDropdown(!showDeleteAllDropdown)}
+                        className="btn-secondary flex items-center text-red-600 hover:text-red-700 hover:bg-red-50"
+                      >
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Hapus Semua
+                        <svg className="ml-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                    
+                      {/* Dropdown Menu */}
+                      {showDeleteAllDropdown && (
+                        <div className="absolute right-0 mt-2 w-64 bg-white rounded-md shadow-lg border border-gray-200 z-50 transform transition-all duration-200 ease-out delete-all-dropdown">
+                          <div className="py-1">
+                            <div className="px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-100">
+                              Pilih Jenis Penghapusan
+                            </div>
+                            <button
+                              onClick={() => {
+                                handleDeleteAllTokens(false);
+                                setShowDeleteAllDropdown(false);
+                              }}
+                              className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-orange-50 hover:text-orange-700 flex items-center transition-colors"
+                            >
+                              <Trash2 className="h-4 w-4 mr-3 text-orange-600" />
+                              <div>
+                                <div className="font-medium">Hapus Semua Token</div>
+                                <div className="text-xs text-gray-500">Token dihapus, data voting tetap</div>
+                              </div>
+                            </button>
+                            <button
+                              onClick={() => {
+                                handleDeleteAllTokens(true);
+                                setShowDeleteAllDropdown(false);
+                              }}
+                              className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-red-50 hover:text-red-700 flex items-center transition-colors"
+                            >
+                              <Trash2 className="h-4 w-4 mr-3 text-red-600" />
+                              <div>
+                                <div className="font-medium">Hapus Token + Data Voting</div>
+                                <div className="text-xs text-gray-500">Semua data akan dihapus permanen</div>
+                              </div>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
              </div>
 
              {/* Token Tabs */}
@@ -1223,6 +1618,8 @@ const AdminDashboard = () => {
                   </div>
                 </div>
               </div>
+
+
 
               <div className="bg-white rounded-lg shadow overflow-hidden">
                <table className="min-w-full divide-y divide-gray-200">
@@ -1373,14 +1770,30 @@ const AdminDashboard = () => {
                        {' '}of{' '}
                        <span className="font-medium">{getSortedAndFilteredTokens().length}</span>
                        {' '}results
+                       {getTotalPages() > 10 && (
+                         <span className="ml-2 text-gray-500">
+                           (Page {currentPage} of {getTotalPages()})
+                         </span>
+                       )}
                      </p>
                    </div>
                    <div>
                      <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                       {/* First Page Button - Show when there are many pages */}
+                       {getTotalPages() > 10 && currentPage > 5 && (
+                         <button
+                           onClick={() => handlePageChange(1)}
+                           className="relative inline-flex items-center px-3 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 transition-colors"
+                           title="Go to first page"
+                         >
+                           1
+                         </button>
+                       )}
+                       
                        <button
                          onClick={() => handlePageChange(currentPage - 1)}
                          disabled={currentPage === 1}
-                         className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                         className="relative inline-flex items-center px-2 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                        >
                          <span className="sr-only">Previous</span>
                          <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
@@ -1389,14 +1802,17 @@ const AdminDashboard = () => {
                        </button>
                        
                        {/* Page Numbers */}
-                       {Array.from({ length: getTotalPages() }, (_, i) => i + 1).map((page) => (
+                       {getPaginationRange().map((page, index) => (
                          <button
-                           key={page}
-                           onClick={() => handlePageChange(page)}
-                           className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
+                           key={index}
+                           onClick={() => typeof page === 'number' ? handlePageChange(page) : null}
+                           disabled={typeof page !== 'number'}
+                           className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium pagination-button ${
                              page === currentPage
-                               ? 'z-10 bg-primary-50 border-primary-500 text-primary-600'
-                               : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
+                               ? 'pagination-active bg-primary-50 border-primary-500 text-primary-600'
+                               : typeof page === 'number'
+                               ? 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
+                               : 'pagination-ellipsis bg-gray-50 border-gray-300 text-gray-400 cursor-default'
                            }`}
                          >
                            {page}
@@ -1406,14 +1822,48 @@ const AdminDashboard = () => {
                        <button
                          onClick={() => handlePageChange(currentPage + 1)}
                          disabled={currentPage === getTotalPages()}
-                         className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                         className="relative inline-flex items-center px-2 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                        >
                          <span className="sr-only">Next</span>
                          <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                            <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
                          </svg>
                        </button>
+                       
+                       {/* Last Page Button - Show when there are many pages */}
+                       {getTotalPages() > 10 && currentPage < getTotalPages() - 4 && (
+                         <button
+                           onClick={() => handlePageChange(getTotalPages())}
+                           className="relative inline-flex items-center px-3 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 transition-colors"
+                           title="Go to last page"
+                         >
+                           {getTotalPages()}
+                         </button>
+                       )}
                      </nav>
+                     
+                     {/* Jump to Page - Show when there are many pages */}
+                     {getTotalPages() > 10 && (
+                       <div className="mt-3 flex items-center justify-center space-x-2">
+                         <span className="text-sm text-gray-600">Go to page:</span>
+                         <input
+                           type="number"
+                           min="1"
+                           max={getTotalPages()}
+                           value={jumpToPage}
+                           onChange={(e) => setJumpToPage(e.target.value)}
+                           onKeyPress={handleJumpToPageKeyPress}
+                           className="w-16 px-2 py-1 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                           placeholder="Page #"
+                         />
+                         <button
+                           onClick={handleJumpToPage}
+                           className="px-3 py-1 text-xs bg-primary-600 text-white rounded-md hover:bg-primary-700 transition-colors"
+                         >
+                           Go
+                         </button>
+                       </div>
+                     )}
                    </div>
                  </div>
                </div>
@@ -1590,17 +2040,6 @@ const AdminDashboard = () => {
                     <div className="border-b border-gray-200">
                       <nav className="-mb-px flex space-x-8 px-6">
                         <button
-                          onClick={() => setResultsTab('overview')}
-                          className={`py-4 px-1 border-b-2 font-medium text-sm ${
-                            resultsTab === 'overview'
-                              ? 'border-primary-500 text-primary-600'
-                              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                          }`}
-                        >
-                          <PieChart className="h-5 w-5 inline mr-2" />
-                          Overview
-                        </button>
-                        <button
                           onClick={() => setResultsTab('ranking')}
                           className={`py-4 px-1 border-b-2 font-medium text-sm ${
                             resultsTab === 'ranking'
@@ -1610,17 +2049,6 @@ const AdminDashboard = () => {
                         >
                           <BarChart3 className="h-5 w-5 inline mr-2" />
                           Perangkingan
-                        </button>
-                        <button
-                          onClick={() => setResultsTab('charts')}
-                          className={`py-4 px-1 border-b-2 font-medium text-sm ${
-                            resultsTab === 'charts'
-                              ? 'border-primary-500 text-primary-600'
-                              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                          }`}
-                        >
-                          <TrendingUp className="h-5 w-5 inline mr-2" />
-                          Grafik
                         </button>
                         <button
                           onClick={() => setResultsTab('votes')}
@@ -1633,157 +2061,25 @@ const AdminDashboard = () => {
                           <Users className="h-5 w-5 inline mr-2" />
                           Detail Votes
                         </button>
+                        <button
+                          onClick={() => setResultsTab('charts')}
+                          className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                            resultsTab === 'charts'
+                              ? 'border-primary-500 text-primary-600'
+                              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                          }`}
+                        >
+                          <TrendingUp className="h-5 w-5 inline mr-2" />
+                          Grafik
+                        </button>
                       </nav>
                     </div>
-
                     <div className="p-6">
-                                             {/* Overview Tab - Redesigned for Better UX */}
-                       {resultsTab === 'overview' && (
-                         <div className="space-y-6">
-                           {/* Welcome Header */}
-                           <div className="text-center bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl p-8 border border-blue-100">
-                             <h3 className="text-3xl font-bold text-gray-800 mb-2">🎯 Dashboard Overview</h3>
-                             <p className="text-gray-600 mb-4">Selamat datang di halaman overview hasil voting</p>
-                             <div className="inline-flex items-center space-x-2 bg-white px-4 py-2 rounded-full shadow-sm">
-                               <span className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></span>
-                               <span className="text-sm text-gray-700">Live Update</span>
-                               <span className="text-xs text-gray-500">• Current: {currentTime.toLocaleTimeString('id-ID')}</span>
-                               <button 
-                                 onClick={() => setLastUpdate(new Date())}
-                                 className="ml-2 p-1 text-gray-500 hover:text-gray-700 transition-colors"
-                                 title="Refresh data"
-                               >
-                                 <RefreshCw className="h-4 w-4" />
-                               </button>
-                             </div>
-                           </div>
-
-                           {/* Main Content Grid */}
-                           <div className="grid grid-cols-1 xl:grid-cols-1 gap-6">
-                             
-                             {/* Quick Stats */}
-                             <div className="space-y-6">
-                               
-                               {/* Top Performer Card */}
-                               <div className="bg-gradient-to-br from-yellow-50 to-orange-50 rounded-2xl p-6 border border-yellow-200">
-                                 <div className="flex items-center justify-between mb-4">
-                                   <h5 className="font-bold text-gray-800">🏆 Top Performer</h5>
-                                   <div className="w-8 h-8 bg-yellow-400 rounded-full flex items-center justify-center">
-                                     <span className="text-white text-sm font-bold">1</span>
-                                   </div>
-                                 </div>
-                                 <div className="text-center">
-                                   <div className="text-2xl font-bold text-gray-800 mb-1">
-                                     {getVotingResults()[0]?.candidate.name || 'Belum ada'}
-                                   </div>
-                                   <div className="text-sm text-gray-600 mb-3">
-                                     {getVotingResults()[0]?.totalPoints || 0} poin
-                                   </div>
-                                   <div className="inline-flex items-center px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-sm font-medium">
-                                     🎯 Juara
-                                   </div>
-                                 </div>
-                               </div>
-                               
-                               {/* Voting Summary Card */}
-                               <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm">
-                                 <h5 className="font-bold text-gray-800 mb-4 flex items-center">
-                                   <BarChart3 className="h-5 w-5 mr-2 text-green-600" />
-                                   Ringkasan Voting
-                                 </h5>
-                                 <div className="space-y-4">
-                                   <div className="flex items-center justify-between p-3 bg-green-50 rounded-xl">
-                                     <div className="flex items-center space-x-2">
-                                       <div className="w-3 h-3 bg-green-400 rounded-full"></div>
-                                       <span className="text-sm text-gray-700">Total Poin</span>
-                                     </div>
-                                     <span className="text-lg font-bold text-green-600">
-                                       {votes.reduce((sum, vote) => sum + vote.points, 0)}
-                                     </span>
-                                   </div>
-                                   
-                                   <div className="flex items-center justify-between p-3 bg-blue-50 rounded-xl">
-                                     <div className="flex items-center space-x-2">
-                                       <div className="w-3 h-3 bg-blue-400 rounded-full"></div>
-                                       <span className="text-sm text-gray-700">Rata-rata</span>
-                                     </div>
-                                     <span className="text-lg font-bold text-blue-600">
-                                       {votes.length > 0 ? Math.round((votes.reduce((sum, vote) => sum + vote.points, 0) / votes.length) * 10) / 10 : 0}
-                                     </span>
-                                   </div>
-                                   
-                                   <div className="flex items-center justify-between p-3 bg-purple-50 rounded-xl">
-                                     <div className="flex items-center space-x-2">
-                                       <div className="w-3 h-3 bg-purple-400 rounded-full"></div>
-                                       <span className="text-sm text-gray-700">Kandidat</span>
-                                     </div>
-                                     <span className="text-lg font-bold text-purple-600">{candidates.length}</span>
-                                   </div>
-                                 </div>
-                               </div>
-                               
-                               {/* Quick Actions Card */}
-                               <div className="bg-gradient-to-br from-indigo-50 to-purple-50 rounded-2xl p-6 border border-indigo-200">
-                                 <h5 className="font-bold text-gray-800 mb-4">⚡ Quick Actions</h5>
-                                 <div className="space-y-3">
-                                   <button 
-                                     onClick={() => setResultsTab('ranking')}
-                                     className="w-full p-3 bg-white rounded-xl border border-indigo-200 hover:bg-indigo-50 transition-colors duration-200 text-left"
-                                   >
-                                     <div className="flex items-center justify-between">
-                                       <span className="text-sm font-medium text-gray-700">Lihat Ranking</span>
-                                       <span className="text-indigo-600">→</span>
-                                     </div>
-                                   </button>
-                                   
-                                   <button 
-                                     onClick={() => setResultsTab('charts')}
-                                     className="w-full p-3 bg-white rounded-xl border border-indigo-200 hover:bg-indigo-50 transition-colors duration-200 text-left"
-                                   >
-                                     <div className="flex items-center justify-between">
-                                       <span className="text-sm font-medium text-gray-700">Analisis Grafik</span>
-                                       <span className="text-indigo-600">→</span>
-                                     </div>
-                                   </button>
-                                   
-                                   <button 
-                                     onClick={() => setResultsTab('votes')}
-                                     className="w-full p-3 bg-white rounded-xl border border-indigo-200 hover:bg-indigo-50 transition-colors duration-200 text-left"
-                                   >
-                                     <div className="flex items-center justify-between">
-                                       <span className="text-sm font-medium text-gray-700">Detail Votes</span>
-                                       <span className="text-indigo-600">→</span>
-                                     </div>
-                                   </button>
-                                 </div>
-                               </div>
-                               
-                             </div>
-                           </div>
-                           
-                           {/* Bottom Info Section */}
-                           <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100">
-                             <div className="text-center">
-                               <h5 className="font-semibold text-gray-800 mb-2">💡 Tips Penggunaan</h5>
-                               <p className="text-gray-600 text-sm">
-                                 Gunakan tab "Perangkingan" untuk melihat posisi kandidat, "Grafik" untuk analisis visual, 
-                                 dan "Detail Votes" untuk melihat semua data voting secara detail.
-                               </p>
-                             </div>
-                           </div>
-                           
-                         </div>
-                       )}
 
                       {/* Ranking Tab */}
                       {resultsTab === 'ranking' && (
                         <div>
                           <h3 className="text-lg font-semibold text-gray-900 mb-4">Perangkingan Kandidat</h3>
-                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-                            <p className="text-sm text-blue-800">
-                              <strong>💡 Tips:</strong> Klik 3x pada nilai total poin untuk mengedit nilai. Perubahan akan otomatis memperbarui grafik dan perangkingan.
-                            </p>
-                          </div>
                           <div className="overflow-x-auto">
                             <table className="min-w-full divide-y divide-gray-200">
                               <thead className="bg-gray-50">
@@ -1969,12 +2265,12 @@ const AdminDashboard = () => {
                           )}
 
                           {chartType === 'pie' && (
-                            <div className="bg-white rounded-lg p-6 border border-gray-200">
+                            <div className="bg-white rounded-lg p-6 border border-gray-200 chart-container" key="pie-chart-container">
                               <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
                                 <PieChart className="h-5 w-5 mr-2 text-green-600" />
                                 Hasil Voting - Distribusi Poin
                               </h4>
-                              {pieChartData.length === 0 ? (
+                              {debouncedChartData.length === 0 ? (
                                 <div className="flex items-center justify-center h-64 text-gray-500">
                                   <div className="text-center">
                                     <PieChart className="h-16 w-16 mx-auto mb-4 text-gray-300" />
@@ -1982,11 +2278,18 @@ const AdminDashboard = () => {
                                     <p className="text-sm">Data akan muncul setelah ada voting</p>
                                   </div>
                                 </div>
+                              ) : pieChartData.length !== debouncedChartData.length ? (
+                                <div className="flex items-center justify-center h-64 text-gray-500">
+                                  <div className="text-center">
+                                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mx-auto mb-4"></div>
+                                    <p className="text-sm">Memperbarui chart...</p>
+                                  </div>
+                                </div>
                               ) : (
-                                <ResponsiveContainer width="100%" height={400} key={`pie-${pieChartData.length}`}>
+                                <ResponsiveContainer width="100%" height={400} className="chart-update" key={`pie-chart-${debouncedChartData.length}`}>
                                   <RechartsPieChart>
                                     <Pie
-                                      data={pieChartData}
+                                      data={debouncedChartData}
                                       cx="50%"
                                       cy="50%"
                                       outerRadius={150}
@@ -1997,9 +2300,11 @@ const AdminDashboard = () => {
                                         if (percent === undefined || percent === null) return name;
                                         return `${name} ${(percent * 100).toFixed(0)}%`;
                                       }}
+                                      animationDuration={300}
+                                      animationBegin={0}
                                     >
-                                      {pieChartData.map((entry, index) => (
-                                        <Cell key={`cell-${index}`} fill={entry.color} />
+                                      {debouncedChartData.map((entry) => (
+                                        <Cell key={`cell-${entry.name}`} fill={entry.color} />
                                       ))}
                                     </Pie>
                                     <Tooltip 
@@ -2018,11 +2323,6 @@ const AdminDashboard = () => {
                       {resultsTab === 'votes' && (
                         <div>
                           <h3 className="text-lg font-semibold text-gray-900 mb-4">Detail Semua Votes</h3>
-                          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
-                            <p className="text-sm text-yellow-800">
-                              <strong>🔒 Transparansi:</strong> Token tidak ditampilkan untuk menjaga kerahasiaan dan transparansi voting. Hanya tipe voter (Siswa/Guru) yang ditampilkan.
-                            </p>
-                          </div>
                           <div className="overflow-x-auto">
                             <table className="min-w-full divide-y divide-gray-200">
                               <thead className="bg-gray-50">

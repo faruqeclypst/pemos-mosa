@@ -39,7 +39,7 @@ const AdminLogin = () => {
             Admin Login
           </h2>
           <p className="mt-2 text-sm text-gray-600">
-            Masuk ke dashboard admin PEMOS SMAN Modal Bangsa
+            Masuk ke dashboard admin PEMOS
           </p>
         </div>
 

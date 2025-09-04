@@ -101,6 +101,23 @@
   /* Smooth transitions for chart updates */
   .chart-update {
     transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    will-change: transform, opacity;
+  }
+
+  /* Prevent chart flickering */
+  .chart-container {
+    backface-visibility: hidden;
+    transform: translateZ(0);
+    perspective: 1000px;
+  }
+
+  /* Smooth pie chart transitions */
+  .recharts-pie {
+    transition: all 0.3s ease;
+  }
+
+  .recharts-pie-slice {
+    transition: all 0.3s ease;
   }
   
   /* Enhanced shadows and borders */
@@ -113,6 +130,74 @@
     box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
     transform: translateY(-2px);
     transition: all 0.3s ease;
+  }
+
+  /* Export Dropdown Styles */
+  .export-dropdown {
+    animation: dropdownFadeIn 0.2s ease-out;
+  }
+
+  @keyframes dropdownFadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(-10px) scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  /* Dropdown button hover effects */
+  .export-dropdown button:hover {
+    transform: translateX(4px);
+  }
+
+  /* Smooth transitions for dropdown items */
+  .export-dropdown button {
+    transition: all 0.2s ease;
+  }
+
+  /* Delete All Dropdown Styles */
+  .delete-all-dropdown {
+    animation: dropdownFadeIn 0.2s ease-out;
+  }
+
+  .delete-all-dropdown button:hover {
+    transform: translateX(4px);
+  }
+
+  .delete-all-dropdown button {
+    transition: all 0.2s ease;
+  }
+
+  /* Pagination ellipsis styling */
+  .pagination-ellipsis {
+    user-select: none;
+    pointer-events: none;
+  }
+
+  /* Pagination button hover effects */
+  .pagination-button:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  }
+
+  /* Active page styling */
+  .pagination-active {
+    position: relative;
+    z-index: 10;
+  }
+
+  .pagination-active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #3b82f6, #1d4ed8);
+    border-radius: 1px;
   }
 }
 

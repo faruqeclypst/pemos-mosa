@@ -13,7 +13,7 @@ const LandingPage = () => {
                 <Vote className="h-6 w-6 text-white" />
               </div>
               <h1 className="text-2xl font-bold text-gray-900">
-               PEMOS SMAN MODAL BANGSA {new Date().getFullYear()}
+               PEMOS {new Date().getFullYear()}
              </h1>
             </div>
             <Link 
@@ -53,38 +53,8 @@ const LandingPage = () => {
               className="inline-flex items-center px-8 py-4 bg-primary-600 text-white font-semibold rounded-xl hover:bg-primary-700 transition-all duration-200 text-lg shadow-lg hover:shadow-xl transform hover:scale-105"
             >
               <Vote className="mr-2 h-6 w-6" />
-              Mulai Voting Sekarang
+              Voting Sekarang
             </Link>
-            <div className="flex items-center space-x-4 text-sm text-gray-600">
-              <div className="flex items-center">
-                <Shield className="h-4 w-4 mr-1 text-green-500" />
-                <span>100% Aman</span>
-              </div>
-              <div className="flex items-center">
-                <Smartphone className="h-4 w-4 mr-1 text-blue-500" />
-                <span>Mobile Friendly</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Stats */}
-        <div className="mt-16 grid grid-cols-2 md:grid-cols-4 gap-6">
-          <div className="bg-white/60 backdrop-blur-sm rounded-xl p-6 text-center shadow-lg">
-            <div className="text-3xl font-bold text-primary-600 mb-2">100%</div>
-            <div className="text-sm text-gray-600">Keamanan Data</div>
-          </div>
-          <div className="bg-white/60 backdrop-blur-sm rounded-xl p-6 text-center shadow-lg">
-            <div className="text-3xl font-bold text-primary-600 mb-2">24/7</div>
-            <div className="text-sm text-gray-600">Tersedia</div>
-          </div>
-          <div className="bg-white/60 backdrop-blur-sm rounded-xl p-6 text-center shadow-lg">
-            <div className="text-3xl font-bold text-primary-600 mb-2">Real-time</div>
-            <div className="text-sm text-gray-600">Hasil Voting</div>
-          </div>
-          <div className="bg-white/60 backdrop-blur-sm rounded-xl p-6 text-center shadow-lg">
-            <div className="text-3xl font-bold text-primary-600 mb-2">Easy</div>
-            <div className="text-sm text-gray-600">Penggunaan</div>
           </div>
         </div>
 
@@ -163,24 +133,6 @@ const LandingPage = () => {
               </p>
             </div>
           </div>
-        </div>
-
-        {/* CTA Section */}
-        <div className="mt-20 bg-gradient-to-r from-primary-600 to-blue-600 rounded-3xl p-8 md:p-12 text-center text-white">
-          <h2 className="text-3xl md:text-4xl font-bold mb-6">
-            Siap Memberikan Suara Anda?
-          </h2>
-          <p className="text-xl mb-8 opacity-90 max-w-2xl mx-auto">
-            Setiap suara memiliki arti dalam menentukan masa depan sekolah. 
-            Mari berpartisipasi dalam pemilihan ketua OSIS yang demokratis dan transparan.
-          </p>
-          <Link 
-            to="/vote" 
-            className="inline-flex items-center px-8 py-4 bg-white text-primary-600 font-semibold rounded-xl hover:bg-gray-100 transition-all duration-200 text-lg shadow-lg hover:shadow-xl transform hover:scale-105"
-          >
-            <Vote className="mr-2 h-6 w-6" />
-            Mulai Voting Sekarang
-          </Link>
         </div>
       </main>
 
