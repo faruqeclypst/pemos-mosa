@@ -3,7 +3,7 @@ import { ref, get, update, push } from 'firebase/database';
 import { db } from '../config/firebase';
 import { Candidate, Token, Vote } from '../types';
 import { Heart, Check, Key, ArrowLeft, Users, Vote as VoteIcon } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
 const VotingPage = () => {
@@ -13,6 +13,9 @@ const VotingPage = () => {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
   const [loading, setLoading] = useState(false);
+  const [countdown, setCountdown] = useState(5);
+  const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     fetchCandidates();
@@ -124,56 +127,139 @@ const VotingPage = () => {
     }
   };
 
+  // Auto-redirect after success
+  useEffect(() => {
+    if (step === 'complete') {
+      setCountdown(5);
+      const intervalId = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev <= 1) {
+            clearInterval(intervalId);
+            navigate('/');
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => clearInterval(intervalId);
+    }
+  }, [step, navigate]);
+
+  // Prefill token via URL (?t=ABCDE) and auto-validate if available
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const t = params.get('t');
+    if (!t || step !== 'token') return;
+    const code = t.toUpperCase().slice(0, 5);
+    setToken(code);
+    (async () => {
+      try {
+        setLoading(true);
+        const tokensRef = ref(db, 'tokens');
+        const tokenSnapshot = await get(tokensRef);
+        if (!tokenSnapshot.exists()) {
+          toast.error('Token tidak valid atau sudah digunakan');
+          return;
+        }
+        let found: Token | null = null;
+        tokenSnapshot.forEach((child) => {
+          const data = child.val();
+          if (data.code === code && !data.isUsed) {
+            found = {
+              id: child.key!,
+              ...data,
+              createdAt: data.createdAt ? new Date(data.createdAt) : new Date(),
+              usedAt: data.usedAt ? new Date(data.usedAt) : undefined,
+            };
+          }
+        });
+        if (!found) {
+          toast.error('Token tidak valid atau sudah digunakan');
+          return;
+        }
+        setCurrentToken(found);
+        setStep('voting');
+        toast.success('Token valid! Silakan mulai voting');
+      } catch (e) {
+        console.error('Prefill token error:', e);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [location.search, step]);
+
   if (step === 'token') {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-primary-50 to-blue-50 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="text-center mb-8">
-            <Link to="/" className="inline-flex items-center text-primary-600 hover:text-primary-700 mb-4">
-              <ArrowLeft className="h-5 w-5 mr-2" />
-              Kembali ke Beranda
-            </Link>
-            <div className="mx-auto h-16 w-16 bg-primary-600 rounded-full flex items-center justify-center mb-4">
-              <Key className="h-8 w-8 text-white" />
-            </div>
-            <h1 className="text-2xl font-bold text-gray-900 mb-2">Masukkan Token</h1>
-            <p className="text-gray-600">
-              Masukkan token 5 karakter yang telah diberikan untuk mulai voting
-            </p>
-          </div>
-
-          <form onSubmit={handleTokenSubmit} className="space-y-6">
-            <div>
-              <label htmlFor="token" className="block text-sm font-medium text-gray-700 mb-2">
-                Token Voting
-              </label>
-              <input
-                id="token"
-                type="text"
-                value={token}
-                onChange={(e) => setToken(e.target.value.toUpperCase())}
-                className="input-field text-center text-2xl font-mono tracking-widest"
-                placeholder="ABCDE"
-                maxLength={5}
-                required
-              />
-              <p className="text-xs text-gray-500 mt-2 text-center">
-                Token siswa = 1 poin, Token guru = 2 poin
+      <div className="min-h-screen bg-gradient-to-br from-primary-50 via-white to-blue-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-3xl">
+          <div className="relative overflow-hidden rounded-2xl bg-white/70 backdrop-blur shadow-xl">
+            <div className="absolute -top-10 -right-10 h-40 w-40 bg-primary-100 rounded-full blur-2xl"></div>
+            <div className="absolute -bottom-12 -left-10 h-48 w-48 bg-blue-100 rounded-full blur-2xl"></div>
+            
+            <div className="relative p-6 sm:p-10">
+              <div className="mb-4">
+                <Link to="/" className="inline-flex items-center text-primary-600 hover:text-primary-700">
+                  <ArrowLeft className="h-5 w-5 mr-2" />
+                  Kembali ke Beranda
+                </Link>
+              </div>
+              <div className="flex items-center justify-center mb-6">
+                <div className="h-16 w-16 rounded-2xl bg-gradient-to-br from-primary-500 to-blue-600 grid place-items-center shadow-lg">
+                  <Key className="h-8 w-8 text-white" />
+                </div>
+              </div>
+              <h1 className="text-2xl sm:text-3xl font-extrabold text-center text-gray-900">
+                Masukkan Token Voting
+              </h1>
+              <p className="text-center text-gray-600 mt-2">
+                Masukkan token 5 karakter Anda untuk memulai memilih kandidat.
               </p>
-            </div>
 
-            <button
-              type="submit"
-              disabled={loading || token.length !== 5}
-              className="w-full btn-primary py-3 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {loading ? (
-                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white mx-auto"></div>
-              ) : (
-                'Mulai Voting'
-              )}
-            </button>
-          </form>
+              {/* Progress indicator */}
+              <div className="flex items-center justify-center gap-2 mt-6">
+                <div className="h-1 w-16 sm:w-24 rounded bg-primary-600"></div>
+                <div className="h-1 w-16 sm:w-24 rounded bg-gray-200"></div>
+                <div className="h-1 w-16 sm:w-24 rounded bg-gray-200"></div>
+              </div>
+
+              <form onSubmit={handleTokenSubmit} className="mt-8 space-y-6">
+                <div>
+                  <label htmlFor="token" className="block text-sm font-medium text-gray-700 mb-2 text-center">
+                    Token Voting
+                  </label>
+                  <input
+                    id="token"
+                    type="text"
+                    value={token}
+                    onChange={(e) => setToken(e.target.value.toUpperCase())}
+                    className="w-full max-w-xs mx-auto block text-center text-3xl font-mono tracking-[0.6em] px-4 py-4 rounded-xl border border-gray-300 focus:outline-none focus:ring-4 focus:ring-primary-200 focus:border-primary-500 shadow-sm"
+                    placeholder="ABCDE"
+                    maxLength={5}
+                    required
+                  />
+                  <p className="text-xs text-gray-500 mt-3 text-center">
+                    Token siswa = 1 poin, Token guru = 2 poin
+                  </p>
+                </div>
+
+                <div className="flex justify-center">
+                  <button
+                    type="submit"
+                    disabled={loading || token.length !== 5}
+                    className="inline-flex items-center gap-2 rounded-xl bg-primary-600 px-6 py-3 font-semibold text-white shadow-lg shadow-primary-200 hover:bg-primary-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {loading ? (
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                    ) : (
+                      <>
+                        <VoteIcon className="h-5 w-5" /> Mulai Voting
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -196,131 +282,120 @@ const VotingPage = () => {
     }
 
     return (
-      <div className="min-h-screen bg-gray-50">
-        {/* Header */}
-        <header className="bg-white shadow-sm px-4 sm:px-6 py-4">
-          <div className="max-w-7xl mx-auto flex items-center justify-between">
-            <div className="flex items-center space-x-2 sm:space-x-4">
-              <Key className="h-5 w-5 sm:h-6 sm:w-6 text-primary-600" />
-              <div>
-                <h1 className="text-lg sm:text-xl font-bold text-gray-900">Pemilihan Ketua OSIS</h1>
-                <p className="text-xs sm:text-sm text-gray-600">
-                  Token: {currentToken?.code} ({currentToken?.type === 'student' ? 'Siswa' : 'Guru'})
-                </p>
+      <div className="min-h-screen bg-gradient-to-b from-white to-gray-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-7xl">
+          {/* Header / status bar */}
+          <div className="px-4 sm:px-6 py-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-primary-100 grid place-items-center">
+                  <Key className="h-5 w-5 text-primary-600" />
+                </div>
+                <div>
+                  <h1 className="text-lg sm:text-xl font-bold text-gray-900">Pemilihan Ketua OSIS</h1>
+                  <p className="text-xs sm:text-sm text-gray-600">
+                    Token: {currentToken?.code} ({currentToken?.type === 'student' ? 'Siswa' : 'Guru'})
+                  </p>
+                </div>
+              </div>
+              <div className="hidden sm:flex items-center gap-2">
+                <div className="h-1 w-20 rounded bg-primary-600"></div>
+                <div className="h-1 w-20 rounded bg-primary-600"></div>
+                <div className="h-1 w-20 rounded bg-gray-200"></div>
               </div>
             </div>
-            <div className="text-xs sm:text-sm text-gray-600">
-              Pilih kandidat favorit Anda
-            </div>
           </div>
-        </header>
 
-                 {/* Candidates Grid */}
-         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
-           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-             {candidates.map((candidate) => (
-               <div
-                 key={candidate.id}
-                 className="bg-white rounded-xl shadow-lg overflow-hidden hover:shadow-xl transition-shadow duration-300 cursor-pointer"
-                 onClick={() => handleSelectCandidate(candidate)}
-               >
-                                   {/* Image with overlay text information */}
-                  <div className="relative">
+        {/* Candidates Grid */}
+        <div className="px-4 sm:px-6 py-6 sm:py-10">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-8">
+            {candidates.map((candidate) => (
+              <div
+                key={candidate.id}
+                className="group rounded-2xl bg-white shadow-lg ring-1 ring-gray-100 overflow-hidden hover:shadow-xl transition-all duration-300 cursor-pointer"
+                onClick={() => handleSelectCandidate(candidate)}
+              >
+                {/* Media */}
+                <div className="relative">
+                  <div className="relative w-full pt-[120%] overflow-hidden">
                     <img
                       src={candidate.photo || 'https://via.placeholder.com/400x480?text=No+Image'}
                       alt={candidate.name}
-                      className="w-full h-96 object-cover object-center"
+                      className="absolute inset-0 w-full h-full object-cover object-center transform transition-transform duration-300 group-hover:scale-[1.02]"
                     />
-                    
-                    {/* Overlay gradient for better text readability */}
                     <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent"></div>
-                    
-                    {/* Text information overlaid on image */}
-                    <div className="absolute bottom-0 left-0 right-0 p-4 sm:p-6 text-white">
-                      <h2 className="text-lg sm:text-xl font-bold mb-2 drop-shadow-lg">{candidate.name}</h2>
-                      {candidate.class && (
-                        <p className="text-sm text-white/90 mb-3 font-medium drop-shadow-md">{candidate.class}</p>
-                      )}
-                      
-                      <div className="space-y-3">
-                        <div>
-                          <h3 className="text-xs font-semibold text-white/80 uppercase tracking-wide mb-1 flex items-center drop-shadow-md">
-                            <VoteIcon className="h-3 w-3 mr-2 text-white/90" />
-                            Visi
-                          </h3>
-                          <p className="text-sm text-white/95 leading-relaxed line-clamp-2 drop-shadow-md">{candidate.vision}</p>
-                        </div>
-                        
-                        <div>
-                          <h3 className="text-xs font-semibold text-white/80 uppercase tracking-wide mb-1 flex items-center drop-shadow-md">
-                            <VoteIcon className="h-3 w-3 mr-2 text-white/90" />
-                            Misi
-                          </h3>
-                          <p className="text-sm text-white/95 leading-relaxed line-clamp-2 drop-shadow-md">{candidate.mission}</p>
-                        </div>
-                      </div>
-                    </div>
                   </div>
-                 
-                 <div className="p-4 sm:p-6">
-                   <button className="w-full bg-primary-600 hover:bg-primary-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors duration-200 flex items-center justify-center">
-                     <Heart className="h-5 w-5 mr-2" />
-                     Pilih Kandidat Ini
-                   </button>
-                 </div>
-               </div>
-             ))}
-           </div>
-         </div>
+                  
+                  <div className="absolute bottom-0 left-0 right-0 p-4 sm:p-6 text-white">
+                    <h2 className="text-lg sm:text-xl font-extrabold mb-1 drop-shadow">{candidate.name}</h2>
+                    {candidate.class && (
+                      <p className="text-sm text-white/90 mb-3 font-medium drop-shadow">{candidate.class}</p>
+                    )}
+                    <div className="text-xs text-white/90 drop-shadow">Tap untuk memilih</div>
+                  </div>
+                </div>
+
+                {/* CTA */}
+                <div className="p-4 sm:p-6">
+                  <button className="w-full bg-primary-600 hover:bg-primary-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors duration-200 flex items-center justify-center">
+                    <Heart className="h-5 w-5 mr-2" /> Pilih Kandidat Ini
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        </div>
       </div>
     );
   }
 
   if (step === 'confirm') {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="bg-white rounded-2xl shadow-lg p-6">
+      <div className="min-h-screen bg-gradient-to-b from-white to-gray-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-3xl">
+          <div className="bg-white/80 backdrop-blur rounded-2xl shadow-xl p-6 sm:p-10">
             <div className="text-center mb-6">
-              <div className="mx-auto h-16 w-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
+              <div className="mx-auto h-16 w-16 bg-green-100 rounded-2xl grid place-items-center mb-4">
                 <Check className="h-8 w-8 text-green-600" />
               </div>
-              <h2 className="text-xl font-bold text-gray-900 mb-2">Konfirmasi Voting</h2>
+              <h2 className="text-xl sm:text-2xl font-extrabold text-gray-900 mb-2">Konfirmasi Voting</h2>
               <p className="text-gray-600">
-                Anda akan memberikan {currentToken?.type === 'student' ? '1' : '2'} poin untuk:
+                Anda akan memberikan {currentToken?.type === 'student' ? '1' : '2'} poin untuk kandidat berikut:
               </p>
             </div>
 
             {selectedCandidate && (
-              <div className="bg-gray-50 rounded-lg p-4 mb-6">
-                <div className="text-center mb-4">
-                  <h3 className="font-semibold text-gray-900 text-lg mb-1">{selectedCandidate.name}</h3>
-                  {selectedCandidate.class && (
-                    <p className="text-sm text-gray-600 mb-2">{selectedCandidate.class}</p>
-                  )}
-                  <p className="text-sm text-gray-600">
-                    Token: {currentToken?.code} ({currentToken?.type === 'student' ? 'Siswa' : 'Guru'})
-                  </p>
+              <div className="bg-gradient-to-br from-gray-50 to-white rounded-xl p-5 sm:p-6 border border-gray-100 mb-6">
+                <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
+                  <div className="relative w-28 h-36 sm:w-32 sm:h-40 rounded-lg overflow-hidden shadow">
+                    <img
+                      src={selectedCandidate.photo || 'https://via.placeholder.com/400x480?text=No+Image'}
+                      alt={selectedCandidate.name}
+                      className="absolute inset-0 w-full h-full object-cover object-center"
+                    />
+                  </div>
+                  <div className="text-center sm:text-left">
+                    <h3 className="font-bold text-gray-900 text-lg sm:text-xl">{selectedCandidate.name}</h3>
+                    {selectedCandidate.class && (
+                      <p className="text-sm text-gray-600 mt-1">{selectedCandidate.class}</p>
+                    )}
+                    <p className="text-sm text-gray-600 mt-2">
+                      Token: {currentToken?.code} ({currentToken?.type === 'student' ? 'Siswa' : 'Guru'})
+                    </p>
+                  </div>
                 </div>
-                
-                                 <div className="flex justify-center">
-                   <img
-                     src={selectedCandidate.photo || 'https://via.placeholder.com/200x250?text=No+Image'}
-                     alt={selectedCandidate.name}
-                     className="w-32 h-40 object-cover object-center rounded-lg shadow-md"
-                   />
-                 </div>
               </div>
             )}
 
-            <div className="space-y-3">
+            <div className="flex flex-col sm:flex-row gap-3">
               <button
                 onClick={handleConfirmVote}
                 disabled={loading}
-                className="w-full btn-primary py-3 text-lg disabled:opacity-50"
+                className="w-full sm:flex-1 inline-flex justify-center items-center rounded-xl bg-primary-600 px-6 py-3 font-semibold text-white shadow hover:bg-primary-700 transition disabled:opacity-50"
               >
                 {loading ? (
-                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white mx-auto"></div>
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
                 ) : (
                   'Konfirmasi & Submit'
                 )}
@@ -329,7 +404,7 @@ const VotingPage = () => {
               <button
                 onClick={() => setStep('voting')}
                 disabled={loading}
-                className="w-full btn-secondary py-3 text-lg disabled:opacity-50"
+                className="w-full sm:flex-1 inline-flex justify-center items-center rounded-xl bg-gray-100 hover:bg-gray-200 px-6 py-3 font-semibold text-gray-800 transition disabled:opacity-50"
               >
                 Kembali & Pilih Lain
               </button>
@@ -342,19 +417,15 @@ const VotingPage = () => {
 
   if (step === 'complete') {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 flex items-center justify-center p-4">
-        <div className="w-full max-w-md text-center">
-          <div className="mx-auto h-20 w-20 bg-green-500 rounded-full flex items-center justify-center mb-6">
-            <Check className="h-10 w-10 text-white" />
+      <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-blue-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-3xl text-center">
+          <div className="mx-auto h-24 w-24 bg-green-500 rounded-3xl grid place-items-center shadow-lg mb-6">
+            <Check className="h-12 w-12 text-white" />
           </div>
-          
-          <h1 className="text-2xl font-bold text-gray-900 mb-4">Voting Berhasil!</h1>
-          <p className="text-gray-600 mb-8">
-            Terima kasih telah berpartisipasi dalam pemilihan ketua OSIS. 
-            Suara Anda telah tercatat dengan aman.
-          </p>
-          
-          <Link to="/" className="btn-primary">
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 mb-3">Voting Berhasil!</h1>
+          <p className="text-gray-600 mb-2">Terima kasih telah berpartisipasi. Suara Anda telah tercatat dengan aman.</p>
+          <p className="text-gray-500 mb-8">Mengalihkan ke beranda dalam {countdown}s...</p>
+          <Link to="/" className="inline-flex items-center rounded-xl bg-primary-600 px-6 py-3 font-semibold text-white shadow hover:bg-primary-700 transition">
             Kembali ke Beranda
           </Link>
         </div>

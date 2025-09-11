@@ -12,7 +12,6 @@ import {
   Edit, 
   Trash2, 
   BarChart3,
-  UserPlus,
   Copy,
   CheckCircle,
   PieChart,
@@ -34,7 +33,7 @@ const AdminDashboard = () => {
   const [chartType, setChartType] = useState('bar');
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [tokens, setTokens] = useState<Token[]>([]);
-  const [admins, setAdmins] = useState<Admin[]>([]);
+  // const [admins, setAdmins] = useState<Admin[]>([]);
   const [votes, setVotes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
@@ -46,6 +45,13 @@ const AdminDashboard = () => {
   const [sortField, setSortField] = useState<'code' | 'type' | 'class' | 'isUsed' | 'createdAt'>('createdAt');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const navigate = useNavigate();
+
+  // Fast lookup of existing token codes to avoid duplicates
+  const existingTokenCodeSet = useMemo(() => {
+    const set = new Set<string>();
+    tokens.forEach(t => set.add(t.code));
+    return set;
+  }, [tokens]);
 
   // Reset current page when token tab or search term changes
   useEffect(() => {
@@ -61,6 +67,14 @@ const AdminDashboard = () => {
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [showExportDropdown, setShowExportDropdown] = useState(false);
   const [showDeleteAllDropdown, setShowDeleteAllDropdown] = useState(false);
+  const [showDeleteClassModal, setShowDeleteClassModal] = useState(false);
+  const [deleteClassSelected, setDeleteClassSelected] = useState('');
+  const [showQuickGenerate, setShowQuickGenerate] = useState(false);
+  const [quickScope, setQuickScope] = useState<'all_classes' | 'selected_classes' | 'teachers'>('all_classes');
+  const [quickPerClassCount, setQuickPerClassCount] = useState(1);
+  const [quickSelectedClasses, setQuickSelectedClasses] = useState<string[]>([]);
+  const [quickPreset, setQuickPreset] = useState('');
+  const [addingCandidate, setAddingCandidate] = useState(false);
   const [jumpToPage, setJumpToPage] = useState('');
   const [confirmModalData, setConfirmModalData] = useState<{
     title: string;
@@ -88,7 +102,8 @@ const AdminDashboard = () => {
   const [tokenForm, setTokenForm] = useState({
     type: 'student' as 'student' | 'teacher',
     class: '',
-    count: 1
+    customClass: '',
+    count: '1'
   });
 
   // Admin form
@@ -174,7 +189,7 @@ const AdminDashboard = () => {
           });
         });
       }
-      setAdmins(adminsData);
+      // setAdmins(adminsData);
       setLastUpdate(new Date());
       setIsConnected(true);
     }, (error) => {
@@ -248,20 +263,66 @@ const AdminDashboard = () => {
     return result;
   };
 
+  // Generate a unique token code that doesn't exist in current set
+  const generateUniqueToken = () => {
+    let code = generateToken();
+    let attempts = 0;
+    while (existingTokenCodeSet.has(code) && attempts < 50) {
+      code = generateToken();
+      attempts++;
+    }
+    return code;
+  };
+
+  // Compress image to WebP (returns data URL)
+  const compressImageToWebP = (
+    file: File,
+    maxWidth = 1024,
+    quality = 0.9
+  ): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const reader = new FileReader();
+
+      reader.onload = (e) => {
+        img.onload = () => {
+          const scale = Math.min(1, maxWidth / img.width);
+          const width = Math.round(img.width * scale);
+          const height = Math.round(img.height * scale);
+
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            reject(new Error('Canvas not supported'));
+            return;
+          }
+          ctx.drawImage(img, 0, 0, width, height);
+          try {
+            const dataUrl = canvas.toDataURL('image/webp', quality);
+            resolve(dataUrl);
+          } catch (err) {
+            reject(err);
+          }
+        };
+        img.onerror = () => reject(new Error('Failed to load image'));
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
   const handleAddCandidate = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      setAddingCandidate(true);
       let photoUrl = candidateForm.photo;
       
       // If there's a file uploaded, convert it to base64
       if (candidateForm.photoFile) {
-        const reader = new FileReader();
-        photoUrl = await new Promise((resolve) => {
-          reader.onload = (e) => {
-            resolve(e.target?.result as string);
-          };
-          reader.readAsDataURL(candidateForm.photoFile!);
-        });
+        photoUrl = await compressImageToWebP(candidateForm.photoFile, 1024, 0.9);
       }
       
       const newCandidate = {
@@ -273,42 +334,39 @@ const AdminDashboard = () => {
       const candidatesRef = ref(db, 'candidates');
       await push(candidatesRef, newCandidate);
       setCandidateForm({ name: '', photo: '', photoFile: null, vision: '', mission: '', class: '' });
-      setShowAddCandidate(false);
       toast.success('Kandidat berhasil ditambahkan');
+      setShowAddCandidate(false);
     } catch (error) {
       console.error('Error adding candidate:', error);
       toast.error('Gagal menambahkan kandidat');
+    } finally {
+      setAddingCandidate(false);
     }
   };
 
   const handleAddTokens = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const tokensToAdd = [];
-      for (let i = 0; i < tokenForm.count; i++) {
+      const tokensRef = ref(db, 'tokens');
+      const updates: Record<string, any> = {};
+      const count = Math.max(1, Math.min(100, Number(tokenForm.count) || 1));
+      for (let i = 0; i < count; i++) {
+        const newKey = push(tokensRef).key as string;
         const token: any = {
-          code: generateToken(),
+          code: generateUniqueToken(),
           type: tokenForm.type,
           isUsed: false,
           createdAt: new Date().toISOString()
         };
-        
-        // Only add class property for student tokens
-        if (tokenForm.type === 'student' && tokenForm.class) {
-          token.class = tokenForm.class;
+        if (tokenForm.type === 'student') {
+          const classValue = tokenForm.class === '__custom' ? (tokenForm.customClass || '') : (tokenForm.class || '');
+          token.class = classValue;
         }
-        
-
-        
-        tokensToAdd.push(token);
+        updates[newKey] = token;
       }
+      await update(tokensRef, updates);
       
-      const tokensRef = ref(db, 'tokens');
-      for (const token of tokensToAdd) {
-        await push(tokensRef, token);
-      }
-      
-      setTokenForm({ type: 'student', class: '', count: 1 });
+      setTokenForm({ type: 'student', class: '', customClass: '', count: '1' });
       setShowAddToken(false);
       toast.success(`${tokenForm.count} token berhasil dibuat`);
     } catch (error) {
@@ -378,13 +436,7 @@ const AdminDashboard = () => {
       
       // If there's a file uploaded, convert it to base64
       if (candidateForm.photoFile) {
-        const reader = new FileReader();
-        photoUrl = await new Promise((resolve) => {
-          reader.onload = (e) => {
-            resolve(e.target?.result as string);
-          };
-          reader.readAsDataURL(candidateForm.photoFile!);
-        });
+        photoUrl = await compressImageToWebP(candidateForm.photoFile, 1024, 0.9);
       }
       
       const candidateRef = ref(db, `candidates/${editingCandidate.id}`);
@@ -404,26 +456,7 @@ const AdminDashboard = () => {
     }
   };
 
-  const handleDeleteAdmin = async (id: string) => {
-    showConfirmDialog({
-      title: 'Hapus Admin',
-      message: 'Apakah Anda yakin ingin menghapus admin ini? Tindakan ini tidak dapat dibatalkan.',
-      confirmText: 'Hapus Admin',
-      cancelText: 'Batal',
-      onConfirm: async () => {
-        try {
-          const adminRef = ref(db, `admins/${id}`);
-          await remove(adminRef);
-          toast.success('Admin berhasil dihapus');
-        } catch (error) {
-          console.error('Error deleting admin:', error);
-          toast.error('Gagal menghapus admin');
-        }
-        setShowConfirmModal(false);
-      },
-      type: 'danger'
-    });
-  };
+  // Admin deletion functionality hidden with Admin tab
 
   const handleDeleteToken = async (id: string) => {
     const token = tokens.find(t => t.id === id);
@@ -726,6 +759,120 @@ const AdminDashboard = () => {
     setShowConfirmModal(true);
   };
 
+  // Quick presets for classes
+  const presetOptions: Record<string, string[]> = {
+    'X-1-6': Array.from({ length: 6 }, (_, i) => `X-${i + 1}`),
+    'XI-1-6': Array.from({ length: 6 }, (_, i) => `XI-${i + 1}`),
+    'XII-1-6': Array.from({ length: 6 }, (_, i) => `XII-${i + 1}`),
+  };
+
+  const applyPresetClasses = (key: string) => {
+    setQuickPreset(key);
+    setQuickSelectedClasses(presetOptions[key] || []);
+  };
+
+  const handleQuickGenerate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const tokensRef = ref(db, 'tokens');
+      const updates: any = {};
+      const addToken = (type: 'student' | 'teacher', className?: string) => {
+        const newKey = push(tokensRef).key as string;
+        updates[newKey] = {
+          code: generateUniqueToken(),
+          type,
+          class: className || '',
+          isUsed: false,
+          createdAt: new Date().toISOString(),
+        };
+      };
+
+      // Determine classes list based on scope and preset
+      if (quickScope === 'teachers') {
+        // Generate N tokens for teachers
+        const count = Math.max(1, Math.min(100, Number(quickPerClassCount) || 1));
+        for (let i = 0; i < count; i++) addToken('teacher');
+      } else if (quickScope === 'all_classes') {
+        const fromPreset = quickPreset && presetOptions[quickPreset] ? presetOptions[quickPreset] : [];
+        const fromExisting = getUniqueClasses();
+        const classes = (fromPreset.length ? fromPreset : fromExisting);
+        if (classes.length === 0) {
+          toast.error('Tidak ada kelas untuk dibuat. Pilih preset atau kelas.');
+          return;
+        }
+        const count = Math.max(1, Math.min(100, Number(quickPerClassCount) || 1));
+        classes.forEach((cls) => {
+          for (let i = 0; i < count; i++) addToken('student', cls);
+        });
+      } else {
+        // selected_classes
+        const classes = quickSelectedClasses.length
+          ? quickSelectedClasses
+          : (quickPreset && presetOptions[quickPreset] ? presetOptions[quickPreset] : []);
+        if (classes.length === 0) {
+          toast.error('Pilih setidaknya satu kelas.');
+          return;
+        }
+        const count = Math.max(1, Math.min(100, Number(quickPerClassCount) || 1));
+        classes.forEach((cls) => {
+          for (let i = 0; i < count; i++) addToken('student', cls);
+        });
+      }
+
+      if (Object.keys(updates).length === 0) {
+        toast.error('Tidak ada token yang dibuat. Periksa pengaturan.');
+        return;
+      }
+
+      await update(tokensRef, updates);
+      toast.success('Token berhasil dibuat');
+      setShowQuickGenerate(false);
+    } catch (error) {
+      console.error('Quick generate error:', error);
+      toast.error('Gagal generate token');
+    }
+  };
+
+  // Delete all tokens for a specific class
+  const handleDeleteTokensByClass = (className: string) => {
+    if (!className) return;
+    // Close selector modal immediately and open confirm dialog
+    setShowDeleteClassModal(false);
+    setConfirmModalData({
+      title: 'Hapus Token per Kelas',
+      message: `Anda akan menghapus SEMUA token untuk kelas ${className}. Data voting tetap ada. Lanjutkan?`,
+      confirmText: 'Ya, Hapus Kelas Ini',
+      cancelText: 'Batal',
+      onConfirm: async () => {
+        try {
+          const tokensRef = ref(db, 'tokens');
+          const snapshot = await get(tokensRef);
+          if (snapshot.exists()) {
+            const updates: Record<string, null> = {};
+            snapshot.forEach((child) => {
+              const data = child.val();
+              if (data.type === 'student' && data.class === className) {
+                updates[child.key as string] = null;
+              }
+            });
+            if (Object.keys(updates).length > 0) {
+              await update(tokensRef, updates);
+            }
+          }
+          toast.success(`Semua token untuk ${className} dihapus`);
+        } catch (error) {
+          console.error('Error deleting tokens by class:', error);
+          toast.error('Gagal menghapus token per kelas');
+        }
+        setShowConfirmModal(false);
+        setShowDeleteClassModal(false);
+        setDeleteClassSelected('');
+      },
+      type: 'danger'
+    });
+    setShowConfirmModal(true);
+  };
+
   // Sorting and search functions
   const handleSort = (field: 'code' | 'type' | 'class' | 'isUsed' | 'createdAt') => {
     if (sortField === field) {
@@ -748,7 +895,7 @@ const AdminDashboard = () => {
       );
     }
     
-    // Apply sorting
+    // Apply sorting with deterministic tie-breakers to avoid row reordering
     filtered.sort((a, b) => {
       let aValue: any, bValue: any;
       
@@ -774,14 +921,18 @@ const AdminDashboard = () => {
           bValue = new Date(b.createdAt).getTime();
           break;
         default:
-          return 0;
+          aValue = 0;
+          bValue = 0;
       }
       
-      if (sortDirection === 'asc') {
-        return aValue > bValue ? 1 : -1;
-      } else {
-        return aValue < bValue ? 1 : -1;
-      }
+      const primary = sortDirection === 'asc'
+        ? (aValue > bValue ? 1 : (aValue < bValue ? -1 : 0))
+        : (aValue < bValue ? 1 : (aValue > bValue ? -1 : 0));
+      if (primary !== 0) return primary;
+      // Stable secondary ordering: by code, then by id
+      const codeCmp = a.code.localeCompare(b.code);
+      if (codeCmp !== 0) return codeCmp;
+      return a.id === b.id ? 0 : (a.id > b.id ? 1 : -1);
     });
     
     return filtered;
@@ -865,6 +1016,159 @@ const AdminDashboard = () => {
     document.body.removeChild(link);
     
     toast.success('Token berhasil diexport ke Excel');
+  };
+
+  // Lazy-load SheetJS from CDN and export XLSX with one sheet per class
+  const ensureXLSX = async (): Promise<any> => {
+    // Reuse if already loaded
+    if ((window as any).XLSX) return (window as any).XLSX;
+    await new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+      script.async = true;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Gagal memuat XLSX library'));
+      document.body.appendChild(script);
+    });
+    return (window as any).XLSX;
+  };
+
+  const exportTokensPerClassXlsx = async () => {
+    try {
+      const XLSX = await ensureXLSX();
+
+      const workbook = XLSX.utils.book_new();
+
+      const classes = getUniqueClasses();
+      if (classes.length === 0) {
+        toast.error('Tidak ada kelas untuk diexport');
+        return;
+      }
+
+      // Teachers sheet (optional)
+      const teacherTokens = tokens.filter(t => t.type === 'teacher');
+      if (teacherTokens.length > 0) {
+        const aoa = [
+          ['Token', 'Tipe', 'Kelas/Guru', 'Status', 'Tanggal Dibuat'],
+          ...teacherTokens.map(t => [
+            t.code,
+            'Guru',
+            'Guru',
+            t.isUsed ? 'Terpakai' : 'Tersedia',
+            new Date(t.createdAt).toLocaleDateString('id-ID')
+          ])
+        ];
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        XLSX.utils.book_append_sheet(workbook, ws, 'Guru');
+      }
+
+      // One sheet per class
+      classes.forEach((cls) => {
+        const classTokens = tokens.filter(t => t.type === 'student' && t.class === cls);
+        const aoa = [
+          ['Token', 'Kelas', 'Status', 'Tanggal Dibuat'],
+          ...classTokens.map(t => [
+            t.code,
+            t.class || '-',
+            t.isUsed ? 'Terpakai' : 'Tersedia',
+            new Date(t.createdAt).toLocaleDateString('id-ID')
+          ])
+        ];
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        // Sheet names max 31 chars in Excel
+        const safeName = (cls || 'Kelas').toString().slice(0, 31);
+        XLSX.utils.book_append_sheet(workbook, ws, safeName);
+      });
+
+      const filename = `tokens_per_kelas_${new Date().toISOString().split('T')[0]}.xlsx`;
+      XLSX.writeFile(workbook, filename);
+      toast.success('Export Excel multi-sheet berhasil');
+    } catch (error) {
+      console.error('Export XLSX error:', error);
+      toast.error('Gagal export Excel per sheet');
+    }
+  };
+
+  // Print-friendly tokens per class (A4, two columns)
+  const printTokensPerClass = () => {
+    const studentTokens = tokens.filter(t => t.type === 'student' && t.class);
+    const classes = Array.from(new Set(studentTokens.map(t => t.class!))).sort();
+    const win = window.open('', '_blank');
+    if (!win) return;
+    const style = `
+      <style>
+        @media print { @page { size: A4; margin: 12mm; } }
+        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; color: #111827; }
+        h1 { font-size: 18px; margin: 0 0 16px; }
+        .class-section { page-break-inside: avoid; margin-bottom: 24px; }
+        .class-title { font-size: 16px; font-weight: 700; margin: 0 0 8px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
+        .token { padding: 8px 10px; border: 1px solid #e5e7eb; border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+        .meta { font-size: 12px; color: #6b7280; margin-bottom: 12px; }
+      </style>`;
+    let html = `<html><head><title>Print Token per Kelas</title>${style}</head><body>`;
+    html += `<h1>Daftar Token per Kelas</h1>`;
+    classes.forEach(cls => {
+      const list = studentTokens.filter(t => t.class === cls);
+      html += `<div class="class-section">`;
+      html += `<div class="class-title">${cls} (${list.length} token)</div>`;
+      html += `<div class="grid">`;
+      list.forEach(t => { html += `<div class="token">${t.code}</div>`; });
+      html += `</div></div>`;
+    });
+    html += `</body></html>`;
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+  };
+
+  // Print QR per class (QR links prefill to VotingPage with token)
+  const printQRCodesPerClass = () => {
+    const allTokens = tokens.filter(t => t.type === 'student' && t.class);
+    const classes = Array.from(new Set(allTokens.map(t => t.class!))).sort();
+    const baseUrl = `${window.location.origin}/vote`;
+    const qrFor = (code: string) => {
+      const url = `${baseUrl}?t=${encodeURIComponent(code)}`;
+      const data = encodeURIComponent(url);
+      // Free QR service
+      return `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${data}`;
+    };
+    const win = window.open('', '_blank');
+    if (!win) return;
+    const style = `
+      <style>
+        @media print { @page { size: A4; margin: 10mm; } }
+        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; color: #111827; }
+        h1 { font-size: 18px; margin: 0 0 16px; }
+        .section { page-break-before: always; }
+        .title { font-size: 16px; font-weight: 700; margin: 0 0 10px; }
+        .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+        .card { border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px; text-align: center; }
+        .code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; margin-top: 6px; font-weight: 700; }
+        .link { font-size: 10px; color: #6b7280; word-break: break-all; margin-top: 4px; }
+      </style>`;
+    let html = `<html><head><title>QR Token per Kelas</title>${style}</head><body>`;
+    html += `<h1>QR Token Voting per Kelas</h1>`;
+    classes.forEach((cls) => {
+      const list = allTokens.filter(t => t.class === cls);
+      html += `<div class="section"><div class="title">${cls} (${list.length} token)</div>`;
+      html += `<div class="grid">`;
+      list.forEach(t => {
+        const link = `${baseUrl}?t=${encodeURIComponent(t.code)}`;
+        html += `<div class="card">`;
+        html += `<img src="${qrFor(t.code)}" alt="QR ${t.code}" width="160" height="160" />`;
+        html += `<div class="code">${t.code}</div>`;
+        html += `<div class="link">${link}</div>`;
+        html += `</div>`;
+      });
+      html += `</div></div>`;
+    });
+    html += `</body></html>`;
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    win.focus();
   };
 
   // Function to export tokens per class in one Excel file with multiple sheets
@@ -1235,17 +1539,7 @@ const AdminDashboard = () => {
               <Key className="h-4 w-4 inline mr-2" />
               Token
             </button>
-            <button
-              onClick={() => setActiveTab('admins')}
-              className={`py-3 px-1 border-b-2 font-medium text-sm whitespace-nowrap transition-colors ${
-                activeTab === 'admins'
-                  ? 'border-primary-500 text-primary-600 bg-primary-50'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              <Settings className="h-4 w-4 inline mr-2" />
-              Admin
-            </button>
+            {/* Admin tab hidden */}
             <button
               onClick={() => setActiveTab('results')}
               className={`py-3 px-1 border-b-2 font-medium text-sm whitespace-nowrap transition-colors ${
@@ -1281,35 +1575,26 @@ const AdminDashboard = () => {
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
               {candidates.map((candidate) => (
                 <div key={candidate.id} className="card">
-                  {/* Image with overlay text information */}
+                  {/* Image with enforced 5:6 aspect ratio (400x480) */}
                   <div className="relative mb-4">
+                    <div className="relative w-full pt-[120%] rounded-lg overflow-hidden shadow-md">
                     <img
                       src={candidate.photo || 'https://via.placeholder.com/400x480?text=No+Image'}
                       alt={candidate.name}
-                      className="w-full h-96 object-cover object-center rounded-lg shadow-md"
+                        className="absolute inset-0 w-full h-full object-cover object-center"
                     />
-                    
                     {/* Overlay gradient for better text readability */}
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent rounded-lg"></div>
-                    
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent"></div>
+                    </div>
                     {/* Text information overlaid on image */}
-                    <div className="absolute bottom-0 left-0 right-0 p-4 text-white">
+                    <div className="absolute bottom-0 left-0 right-0 p-4 text-white pointer-events-none">
                       <h3 className="text-lg font-semibold mb-2 drop-shadow-lg">{candidate.name}</h3>
                       {candidate.class && (
                         <p className="text-sm text-white/90 mb-3 drop-shadow-md">
                           <span className="font-medium">Kelas:</span> {candidate.class}
                         </p>
                       )}
-                      <div className="space-y-2">
-                        <div>
-                          <p className="text-xs font-medium text-white/80 uppercase tracking-wide mb-1 drop-shadow-md">Visi</p>
-                          <p className="text-sm text-white/95 leading-relaxed drop-shadow-md line-clamp-2">{candidate.vision}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs font-medium text-white/80 uppercase tracking-wide mb-1 drop-shadow-md">Misi</p>
-                          <p className="text-sm text-white/95 leading-relaxed drop-shadow-md line-clamp-2">{candidate.mission}</p>
-                        </div>
-                      </div>
+                      <div className="text-xs text-white/90 drop-shadow">Tap untuk detail kandidat</div>
                     </div>
                   </div>
                   
@@ -1412,10 +1697,57 @@ const AdminDashboard = () => {
                               <div className="text-xs text-gray-500">Guru + siswa lengkap</div>
                             </div>
                           </button>
+                          <button
+                            onClick={() => {
+                              exportTokensPerClassXlsx();
+                              setShowExportDropdown(false);
+                            }}
+                            className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 flex items-center transition-colors"
+                          >
+                            <Download className="h-4 w-4 mr-3 text-blue-600" />
+                            <div>
+                              <div className="font-medium">Export Excel (Sheet per Kelas)</div>
+                              <div className="text-xs text-gray-500">Setiap kelas ke lembar terpisah</div>
+                            </div>
+                          </button>
+                        <div className="border-t my-1"></div>
+                        <button
+                          onClick={() => {
+                            printTokensPerClass();
+                            setShowExportDropdown(false);
+                          }}
+                          className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 flex items-center transition-colors"
+                        >
+                          <Download className="h-4 w-4 mr-3 text-gray-600" />
+                          <div>
+                            <div className="font-medium">Print per Kelas (A4)</div>
+                            <div className="text-xs text-gray-500">Layout ringkas 2 kolom</div>
+                          </div>
+                        </button>
+                        <button
+                          onClick={() => {
+                            printQRCodesPerClass();
+                            setShowExportDropdown(false);
+                          }}
+                          className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 flex items-center transition-colors"
+                        >
+                          <Download className="h-4 w-4 mr-3 text-gray-600" />
+                          <div>
+                            <div className="font-medium">Print QR per Kelas</div>
+                            <div className="text-xs text-gray-500">QR isi tautan voting + token</div>
+                          </div>
+                        </button>
                         </div>
                       </div>
                     )}
                   </div>
+                <button
+                  onClick={() => setShowQuickGenerate(true)}
+                   className="btn-primary flex items-center"
+                 >
+                   <Key className="h-4 w-4 mr-2" />
+                   Generate Cepat
+                 </button>
                                    <button
                     onClick={() => setShowAddToken(true)}
                     className="btn-primary flex items-center"
@@ -1467,10 +1799,23 @@ const AdminDashboard = () => {
                             >
                               <Trash2 className="h-4 w-4 mr-3 text-red-600" />
                               <div>
-                                <div className="font-medium">Hapus Token + Data Voting</div>
-                                <div className="text-xs text-gray-500">Semua data akan dihapus permanen</div>
+                               <div className="font-medium">Hapus Semua Token + Voting</div>
+                               <div className="text-xs text-gray-500">Termasuk reset data voting</div>
                               </div>
                             </button>
+                           <button
+                             onClick={() => {
+                               setShowDeleteClassModal(true);
+                               setShowDeleteAllDropdown(false);
+                             }}
+                             className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-red-50 hover:text-red-700 flex items-center transition-colors"
+                           >
+                             <Trash2 className="h-4 w-4 mr-3 text-red-600" />
+                             <div>
+                               <div className="font-medium">Hapus Token per Kelas</div>
+                               <div className="text-xs text-gray-500">Pilih kelas yang akan dihapus</div>
+                             </div>
+                           </button>
                           </div>
                         </div>
                       )}
@@ -1503,19 +1848,6 @@ const AdminDashboard = () => {
                    >
                      Guru ({tokens.filter(t => t.type === 'teacher').length})
                    </button>
-                   {getUniqueClasses().map((className) => (
-                     <button
-                       key={className}
-                       onClick={() => setTokenTab(className)}
-                       className={`py-2 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${
-                         tokenTab === className
-                           ? 'border-primary-500 text-primary-600'
-                           : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                       }`}
-                     >
-                       {className} ({tokens.filter(t => t.type === 'student' && t.class === className).length})
-                     </button>
-                   ))}
                  </nav>
                </div>
              </div>
@@ -1533,17 +1865,24 @@ const AdminDashboard = () => {
                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                    />
                  </div>
-                 <div className="flex items-end">
-                   <button
-                     onClick={() => {
-                       setSearchTerm('');
-                       setSortField('createdAt');
-                       setSortDirection('desc');
+                 <div className="flex-1 md:flex-none md:w-64">
+                   <label className="block text-sm font-medium text-gray-700 mb-2">Filter Kelas</label>
+                   <select
+                     value={tokenTab === 'all' || tokenTab === 'teachers' ? '' : tokenTab}
+                     onChange={(e) => {
+                       const val = e.target.value;
+                       if (!val) setTokenTab('all');
+                       else setTokenTab(val);
                      }}
-                     className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                    >
-                     Reset
-                   </button>
+                     <option value="">Semua Kelas</option>
+                     {getUniqueClasses().map((cls) => (
+                       <option key={cls} value={cls}>
+                         {cls} ({tokens.filter(t => t.type === 'student' && t.class === cls).length})
+                       </option>
+                     ))}
+                   </select>
                  </div>
                </div>
              </div>
@@ -1625,6 +1964,9 @@ const AdminDashboard = () => {
                <table className="min-w-full divide-y divide-gray-200">
                  <thead className="bg-gray-50">
                    <tr>
+                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                       No.
+                     </th>
                      <th 
                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                        onClick={() => handleSort('code')}
@@ -1683,8 +2025,11 @@ const AdminDashboard = () => {
                    </tr>
                  </thead>
                  <tbody className="bg-white divide-y divide-gray-200">
-                   {getCurrentTokens().map((token) => (
+                   {getCurrentTokens().map((token, index) => (
                      <tr key={token.id}>
+                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                         {(currentPage - 1) * tokensPerPage + index + 1}
+                       </td>
                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                          <div className="flex items-center space-x-2">
                            <span className="font-mono bg-gray-100 px-2 py-1 rounded">{token.code}</span>
@@ -1871,59 +2216,7 @@ const AdminDashboard = () => {
            </div>
          )}
 
-        {activeTab === 'admins' && (
-          <div>
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-semibold text-gray-900">Daftar Admin</h2>
-              <button
-                onClick={() => setShowAddAdmin(true)}
-                className="btn-primary flex items-center"
-              >
-                <UserPlus className="h-4 w-4 mr-2" />
-                Tambah Admin
-              </button>
-            </div>
-
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {admins.map((admin) => (
-                <div key={admin.id} className="card">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center space-x-3">
-                      <div className="h-12 w-12 bg-primary-100 rounded-full flex items-center justify-center">
-                        <span className="text-primary-600 font-semibold">
-                          {admin.name.charAt(0).toUpperCase()}
-                        </span>
-                      </div>
-                      <div>
-                        <h3 className="text-lg font-semibold text-gray-900">{admin.name}</h3>
-                        <p className="text-sm text-gray-600">{admin.email}</p>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleDeleteAdmin(admin.id)}
-                      className="text-red-600 hover:text-red-700 p-2"
-                      title="Hapus admin"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
-                      admin.role === 'super' 
-                        ? 'bg-purple-100 text-purple-800' 
-                        : 'bg-gray-100 text-gray-800'
-                    }`}>
-                      {admin.role === 'super' ? 'Super Admin' : 'Admin'}
-                    </span>
-                    <span className="text-xs text-gray-500">
-                      Dibuat: {new Date(admin.createdAt).toLocaleDateString('id-ID')}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* Admin content hidden */}
 
                                    {activeTab === 'results' && (
             <div>
@@ -2050,17 +2343,19 @@ const AdminDashboard = () => {
                           <BarChart3 className="h-5 w-5 inline mr-2" />
                           Perangkingan
                         </button>
-                        <button
-                          onClick={() => setResultsTab('votes')}
-                          className={`py-4 px-1 border-b-2 font-medium text-sm ${
-                            resultsTab === 'votes'
-                              ? 'border-primary-500 text-primary-600'
-                              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                          }`}
-                        >
-                          <Users className="h-5 w-5 inline mr-2" />
-                          Detail Votes
-                        </button>
+                        {false && (
+                          <button
+                            onClick={() => setResultsTab('votes')}
+                            className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                              resultsTab === 'votes'
+                                ? 'border-primary-500 text-primary-600'
+                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                            }`}
+                          >
+                            <Users className="h-5 w-5 inline mr-2" />
+                            Detail Votes
+                          </button>
+                        )}
                         <button
                           onClick={() => setResultsTab('charts')}
                           className={`py-4 px-1 border-b-2 font-medium text-sm ${
@@ -2319,73 +2614,7 @@ const AdminDashboard = () => {
                         </div>
                       )}
 
-                      {/* Votes Tab */}
-                      {resultsTab === 'votes' && (
-                        <div>
-                          <h3 className="text-lg font-semibold text-gray-900 mb-4">Detail Semua Votes</h3>
-                          <div className="overflow-x-auto">
-                            <table className="min-w-full divide-y divide-gray-200">
-                              <thead className="bg-gray-50">
-                                <tr>
-                                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    Kandidat
-                                  </th>
-                                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    Tipe Voter
-                                  </th>
-                                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    Tanggal
-                                  </th>
-                                </tr>
-                              </thead>
-                              <tbody className="bg-white divide-y divide-gray-200">
-                                {votes.map((vote) => {
-                                  const candidate = candidates.find(c => c.id === vote.candidateId);
-                                  const token = tokens.find(t => t.id === vote.tokenId);
-                                  
-                                  return (
-                                    <tr key={vote.id}>
-                                      <td className="px-6 py-4 whitespace-nowrap">
-                                        <div className="flex items-center">
-                                          <img
-                                            src={candidate?.photo || 'https://via.placeholder.com/32x32?text=No+Image'}
-                                            alt={candidate?.name}
-                                            className="w-8 h-8 rounded-full object-cover object-center mr-3"
-                                          />
-                                          <div>
-                                            <div className="text-sm font-medium text-gray-900">{candidate?.name}</div>
-                                            {candidate?.class && (
-                                              <div className="text-sm text-gray-500">{candidate.class}</div>
-                                            )}
-                                          </div>
-                                        </div>
-                                      </td>
-                                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                        <span className={`px-2 py-1 text-xs rounded-full ${
-                                          token?.type === 'student' 
-                                            ? 'bg-green-100 text-green-800' 
-                                            : 'bg-blue-100 text-blue-800'
-                                        }`}>
-                                          {token?.type === 'student' ? 'Siswa' : 'Guru'}
-                                        </span>
-                                      </td>
-                                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                        {new Date(vote.createdAt).toLocaleDateString('id-ID', {
-                                          day: '2-digit',
-                                          month: '2-digit',
-                                          year: 'numeric',
-                                          hour: '2-digit',
-                                          minute: '2-digit'
-                                        })}
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      )}
+                      {/* Votes Tab removed as requested */}
                     </div>
                   </div>
                 </div>
@@ -2397,8 +2626,8 @@ const AdminDashboard = () => {
 
       {/* Add Candidate Modal */}
       {showAddCandidate && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end sm:items-center justify-center p-2 sm:p-4 z-50">
+          <div className="bg-white rounded-t-2xl sm:rounded-lg p-4 sm:p-6 w-full max-w-sm sm:max-w-md mx-auto max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-semibold mb-4">Tambah Kandidat</h3>
             <form onSubmit={handleAddCandidate} className="space-y-4">
               <div>
@@ -2462,32 +2691,15 @@ const AdminDashboard = () => {
                   placeholder="Contoh: XII IPA 1"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Visi</label>
-                <textarea
-                  value={candidateForm.vision}
-                  onChange={(e) => setCandidateForm({...candidateForm, vision: e.target.value})}
-                  className="input-field"
-                  rows={3}
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Misi</label>
-                <textarea
-                  value={candidateForm.mission}
-                  onChange={(e) => setCandidateForm({...candidateForm, mission: e.target.value})}
-                  className="input-field"
-                  rows={3}
-                  required
-                />
-              </div>
-              <div className="flex space-x-3">
-                <button type="submit" className="btn-primary flex-1">Tambah</button>
+              
+              <div className="flex flex-col sm:flex-row gap-3">
+                <button type="submit" disabled={addingCandidate} className="btn-primary w-full sm:flex-1 disabled:opacity-50 disabled:cursor-not-allowed">
+                  {addingCandidate ? 'Mengunggah...' : 'Tambah'}
+                </button>
                 <button 
                   type="button" 
-                  onClick={() => setShowAddCandidate(false)}
-                  className="btn-secondary flex-1"
+                  onClick={() => !addingCandidate && setShowAddCandidate(false)}
+                  className="btn-secondary w-full sm:flex-1"
                 >
                   Batal
                 </button>
@@ -2578,26 +2790,7 @@ const AdminDashboard = () => {
                   placeholder="Contoh: XII IPA 1"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Visi</label>
-                <textarea
-                  value={candidateForm.vision}
-                  onChange={(e) => setCandidateForm({...candidateForm, vision: e.target.value})}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
-                  rows={3}
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Misi</label>
-                <textarea
-                  value={candidateForm.mission}
-                  onChange={(e) => setCandidateForm({...candidateForm, mission: e.target.value})}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
-                  rows={3}
-                  required
-                />
-              </div>
+              
               <div className="flex flex-col sm:flex-row gap-3 pt-2">
                 <button 
                   type="submit" 
@@ -2624,8 +2817,8 @@ const AdminDashboard = () => {
 
       {/* Add Token Modal */}
       {showAddToken && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end sm:items-center justify-center p-2 sm:p-4 z-50">
+          <div className="bg-white rounded-t-2xl sm:rounded-lg p-4 sm:p-6 w-full max-w-sm sm:max-w-md mx-auto max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-semibold mb-4">Generate Token</h3>
             <form onSubmit={handleAddTokens} className="space-y-4">
               <div>
@@ -2640,37 +2833,58 @@ const AdminDashboard = () => {
                 </select>
               </div>
               {tokenForm.type === 'student' && (
-                <div>
+                <div className="space-y-2">
                   <label className="block text-sm font-medium text-gray-700">Kelas</label>
-                  <input
-                    type="text"
+                  <select
                     value={tokenForm.class}
-                    onChange={(e) => setTokenForm({...tokenForm, class: e.target.value})}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setTokenForm({...tokenForm, class: value, customClass: value === '__custom' ? tokenForm.customClass : ''});
+                    }}
                     className="input-field"
-                    placeholder="Contoh: XII IPA 1"
                     required
-                  />
+                  >
+                    <option value="">Pilih kelas...</option>
+                    {getUniqueClasses().map((cls) => (
+                      <option key={cls} value={cls}>{cls}</option>
+                    ))}
+                    <option value="__custom">+ Kelas lain...</option>
+                  </select>
+                   {tokenForm.class === '__custom' && (
+                   <input
+                     type="text"
+                     value={tokenForm.customClass || ''}
+                     onChange={(e) => setTokenForm({...tokenForm, customClass: e.target.value})}
+                     className="input-field"
+                     placeholder="Masukkan nama kelas"
+                     required
+                   />
+                   )}
                 </div>
               )}
 
               <div>
-                <label className="block text-sm font-medium text-gray-700">Jumlah Token</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="100"
-                  value={tokenForm.count}
-                  onChange={(e) => setTokenForm({...tokenForm, count: parseInt(e.target.value)})}
-                  className="input-field"
-                  required
-                />
+                  <label className="block text-sm font-medium text-gray-700">Jumlah Token</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={tokenForm.count}
+                    onChange={(e) => {
+                      const value = e.target.value.replace(/[^0-9]/g, '');
+                      setTokenForm({...tokenForm, count: value});
+                    }}
+                    className="input-field"
+                    placeholder="Masukkan jumlah (1-100)"
+                    required
+                  />
               </div>
-              <div className="flex space-x-3">
-                <button type="submit" className="btn-primary flex-1">Generate</button>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <button type="submit" className="btn-primary w-full sm:flex-1">Generate</button>
                 <button 
                   type="button" 
                   onClick={() => setShowAddToken(false)}
-                  className="btn-secondary flex-1"
+                  className="btn-secondary w-full sm:flex-1"
                 >
                   Batal
                 </button>
@@ -2682,8 +2896,8 @@ const AdminDashboard = () => {
 
              {/* Add Admin Modal */}
        {showAddAdmin && (
-         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-           <div className="bg-white rounded-lg p-6 w-full max-w-md">
+         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end sm:items-center justify-center p-2 sm:p-4 z-50">
+           <div className="bg-white rounded-t-2xl sm:rounded-lg p-4 sm:p-6 w-full max-w-sm sm:max-w-md mx-auto max-h-[90vh] overflow-y-auto">
              <h3 className="text-lg font-semibold mb-4">Tambah Admin</h3>
              <form onSubmit={handleAddAdmin} className="space-y-4">
                <div>
@@ -2728,12 +2942,12 @@ const AdminDashboard = () => {
                    <option value="super">Super Admin</option>
                  </select>
                </div>
-               <div className="flex space-x-3">
-                 <button type="submit" className="btn-primary flex-1">Tambah</button>
+               <div className="flex flex-col sm:flex-row gap-3">
+                 <button type="submit" className="btn-primary w-full sm:flex-1">Tambah</button>
                  <button 
                    type="button" 
                    onClick={() => setShowAddAdmin(false)}
-                   className="btn-secondary flex-1"
+                   className="btn-secondary w-full sm:flex-1"
                  >
                    Batal
                  </button>
@@ -2745,8 +2959,8 @@ const AdminDashboard = () => {
 
       {/* Confirmation Modal */}
       {showConfirmModal && confirmModalData && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end sm:items-center justify-center p-2 sm:p-4 z-50">
+          <div className="bg-white rounded-t-2xl sm:rounded-lg p-4 sm:p-6 w-full max-w-sm sm:max-w-md mx-auto">
             <div className="flex items-center space-x-3 mb-4">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
                 confirmModalData?.type === 'danger' ? 'bg-red-100' : 
@@ -2765,10 +2979,10 @@ const AdminDashboard = () => {
             
             <p className="text-gray-600 mb-6 whitespace-pre-line">{confirmModalData?.message}</p>
             
-            <div className="flex space-x-3">
+            <div className="flex flex-col sm:flex-row gap-3">
               <button
                 onClick={() => setShowConfirmModal(false)}
-                className={`flex-1 px-4 py-2 text-sm font-medium rounded-md border transition-colors ${
+                className={`w-full sm:flex-1 px-4 py-2 text-sm font-medium rounded-md border transition-colors ${
                   confirmModalData?.type === 'danger' 
                     ? 'border-gray-300 text-gray-700 hover:bg-gray-50' 
                     : 'border-gray-300 text-gray-700 hover:bg-gray-50'
@@ -2778,7 +2992,7 @@ const AdminDashboard = () => {
               </button>
               <button
                 onClick={confirmModalData?.onConfirm}
-                className={`flex-1 px-4 py-2 text-sm font-medium rounded-md text-white transition-colors ${
+                className={`w-full sm:flex-1 px-4 py-2 text-sm font-medium rounded-md text-white transition-colors ${
                   confirmModalData?.type === 'danger' 
                     ? 'bg-red-600 hover:bg-red-700' 
                     : confirmModalData?.type === 'warning'
@@ -2912,9 +3126,107 @@ const AdminDashboard = () => {
           </div>
         </div>
       )}
+
+      {/* Delete Tokens By Class Modal */}
+      {showDeleteClassModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end sm:items-center justify-center p-2 sm:p-4 z-50">
+          <div className="bg-white rounded-t-2xl sm:rounded-lg p-4 sm:p-6 w-full max-w-sm sm:max-w-md mx-auto">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Hapus Token per Kelas</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Pilih Kelas</label>
+                <select
+                  value={deleteClassSelected}
+                  onChange={(e) => setDeleteClassSelected(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                >
+                  <option value="">-- Pilih Kelas --</option>
+                  {getUniqueClasses().map((cls) => (
+                    <option key={cls} value={cls}>{cls}</option>
+                  ))}
+                </select>
+    </div>
+              <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 text-sm rounded-md p-3">
+                Tindakan ini hanya menghapus token untuk kelas terpilih. Data voting tidak terhapus.
+              </div>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <button
+                  disabled={!deleteClassSelected}
+                  onClick={() => handleDeleteTokensByClass(deleteClassSelected)}
+                  className={`w-full sm:flex-1 px-4 py-2 text-sm font-medium rounded-md text-white transition-colors ${deleteClassSelected ? 'bg-red-600 hover:bg-red-700' : 'bg-red-300 cursor-not-allowed'}`}
+                >
+                  Hapus Token Kelas
+                </button>
+                <button
+                  onClick={() => {
+                    setShowDeleteClassModal(false);
+                    setDeleteClassSelected('');
+                  }}
+                  className="w-full sm:flex-1 px-4 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  Batal
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Generate Modal */}
+      {showQuickGenerate && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end sm:items-center justify-center p-2 sm:p-4 z-50">
+          <div className="bg-white rounded-t-2xl sm:rounded-lg p-4 sm:p-6 w-full max-w-xl mx-auto max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Generate Cepat Token</h3>
+            <form onSubmit={handleQuickGenerate} className="space-y-5">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Cakupan</label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <button type="button" onClick={() => setQuickScope('all_classes')} className={`px-3 py-2 rounded-md border ${quickScope==='all_classes' ? 'bg-primary-50 border-primary-200 text-primary-700' : 'bg-white border-gray-300 text-gray-700'}`}>Semua Kelas</button>
+                  <button type="button" onClick={() => setQuickScope('selected_classes')} className={`px-3 py-2 rounded-md border ${quickScope==='selected_classes' ? 'bg-primary-50 border-primary-200 text-primary-700' : 'bg-white border-gray-300 text-gray-700'}`}>Pilih Kelas</button>
+                  <button type="button" onClick={() => setQuickScope('teachers')} className={`px-3 py-2 rounded-md border ${quickScope==='teachers' ? 'bg-primary-50 border-primary-200 text-primary-700' : 'bg-white border-gray-300 text-gray-700'}`}>Guru</button>
+                </div>
+              </div>
+
+              {quickScope !== 'teachers' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Preset Kelas (opsional)</label>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
+                    {Object.keys(presetOptions).map((key) => (
+                      <button key={key} type="button" onClick={() => applyPresetClasses(key)} className={`px-3 py-2 text-xs rounded-md border ${quickPreset===key ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-white border-gray-300 text-gray-700'}`}>{key}</button>
+                    ))}
+                  </div>
+                  {quickScope === 'selected_classes' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Pilih Kelas</label>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-40 overflow-y-auto border rounded-md p-2">
+                        {getUniqueClasses().map((cls) => {
+                          const active = quickSelectedClasses.includes(cls);
+                          return (
+                            <button type="button" key={cls} onClick={() => setQuickSelectedClasses(active ? quickSelectedClasses.filter(c=>c!==cls) : [...quickSelectedClasses, cls])} className={`px-2 py-1 text-xs rounded border ${active ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-gray-300 text-gray-700'}`}>{cls}</button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Jumlah per kelas / guru</label>
+                <input type="number" min={1} max={100} value={quickPerClassCount} onChange={(e)=>setQuickPerClassCount(parseInt(e.target.value)||1)} className="input-field w-32" />
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3 pt-1">
+                <button type="submit" className="w-full sm:flex-1 btn-primary">Generate</button>
+                <button type="button" onClick={()=>setShowQuickGenerate(false)} className="w-full sm:flex-1 btn-secondary">Batal</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
-};
+}
 
 export default AdminDashboard;
 

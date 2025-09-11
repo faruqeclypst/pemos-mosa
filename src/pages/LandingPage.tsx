@@ -16,12 +16,7 @@ const LandingPage = () => {
                PEMOS {new Date().getFullYear()}
              </h1>
             </div>
-            <Link 
-              to="/admin/login" 
-              className="bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors duration-200 font-medium"
-            >
-              Admin Login
-            </Link>
+            <div></div>
           </div>
         </div>
       </header>
