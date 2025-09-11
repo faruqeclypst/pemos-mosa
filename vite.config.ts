@@ -7,7 +7,7 @@ export default defineConfig({
     // kalau host tunnelnya tetap
     allowedHosts: [
       'localhost',
-      'https://accepted-du-valuable-automatic.trycloudflare.com/'
+      'accepted-du-valuable-automatic.trycloudflare.com'
     ],
 
     // kalau sering berubah (pakai ngrok/trycloudflare random subdomain)
